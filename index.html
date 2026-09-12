@@ -194,6 +194,8 @@ const I18N = {
     t_own:"Company car", t_xanh:"Xanh SM", t_rent:"Rent car",
     rentHint:"Enter 2+ destinations to unlock Rent car.",
     selectVehicle:"Select a vehicle",
+    requestVehicle:"Request — assigned on approval", vehReq:"Vehicle requested",
+    editAssign:"Edit / assign", assignFirst:"Assign a vehicle before approving.",
     blockedBy:"unavailable",
     reason_hold:"Hold", reason_repair:"Repair",
     st_pending:"Pending", st_confirmed:"Confirmed", st_rejected:"Rejected",
@@ -246,6 +248,8 @@ const I18N = {
     t_own:"Xe công ty", t_xanh:"Xanh SM", t_rent:"Xe thuê",
     rentHint:"Nhập từ 2 điểm đến để mở khóa Xe thuê.",
     selectVehicle:"Chọn xe",
+    requestVehicle:"Yêu cầu — điều xe khi duyệt", vehReq:"Chờ điều xe",
+    editAssign:"Sửa / điều xe", assignFirst:"Hãy điều xe trước khi duyệt.",
     blockedBy:"không khả dụng",
     reason_hold:"Giữ chỗ", reason_repair:"Sửa chữa",
     st_pending:"Chờ duyệt", st_confirmed:"Đã duyệt", st_rejected:"Từ chối",
@@ -389,7 +393,10 @@ function visibleReservations(dateStr){
   }).sort((a,b)=>a.startTime.localeCompare(b.startTime));
 }
 function transportLabel(r){
-  if(r.transportMode==="own"){ const v=vehicleById(r.vehicleId); return v?v.name:t("t_own"); }
+  if(r.transportMode==="own"){
+    if(r.vehicleId && r.vehicleId!=="REQUEST"){ const v=vehicleById(r.vehicleId); return v?v.name:t("t_own"); }
+    return t("vehReq");
+  }
   if(r.transportMode==="xanh") return t("t_xanh");
   return t("t_rent");
 }
@@ -628,7 +635,8 @@ function openModal(dateStr,timeStr,existing){
     id:null,date:dateStr,startTime:timeStr,endTime:minToTime(Math.min(DAY_END*60,timeToMin(timeStr)+60)),userName:"",
     transportMode:null,vehicleId:null,destinations:[{place:"",note:""}]
   };
-  const canEdit = existing ? P("resvEdit") : true; // editing existing needs resvEdit permission
+  // editing existing needs resvEdit, OR apprEdit while the item is still pending (assign/adjust during approval)
+  const canEdit = existing ? (P("resvEdit") || (P("apprEdit") && existing.status==="pending")) : true;
   const ov=document.createElement("div"); ov.className="overlay";
   ov.innerHTML=`<div class="modal" role="dialog" aria-modal="true"></div>`;
   document.body.appendChild(ov);
@@ -678,14 +686,15 @@ function openModal(dateStr,timeStr,existing){
         </div></div>`:""}
       <div class="err" id="mErr" hidden></div>
       <div class="actions">
-        ${existing?`<button id="mDelete" class="danger" style="margin-right:auto">${esc(t("del"))}</button>`:""}
+        ${existing && P("resvEdit")?`<button id="mDelete" class="danger" style="margin-right:auto">${esc(t("del"))}</button>`:""}
         <button id="mCancel">${esc(t("cancel"))}</button>
         <button id="mSave" class="primary">${esc(t("save"))}</button>
       </div>`;
     drawDest();
     if(existing){
       modal.querySelectorAll("#mStatus button").forEach(b=>b.onclick=()=>{ draft.status=b.dataset.st; draw(); });
-      modal.querySelector("#mDelete").onclick=()=>{
+      const delBtn=modal.querySelector("#mDelete");
+      if(delBtn) delBtn.onclick=()=>{
         const act=modal.querySelector(".actions");
         act.innerHTML=`<span style="margin-right:auto;color:var(--danger);font-size:13px">${esc(t("confirmDelete"))}</span>
           <button id="mDelNo">${esc(t("cancel"))}</button>
@@ -703,10 +712,7 @@ function openModal(dateStr,timeStr,existing){
     modal.querySelectorAll("#mSeg button").forEach(b=>b.onclick=()=>{
       if(b.disabled) return;
       draft.transportMode=b.dataset.mode;
-      if(draft.transportMode==="own" && !draft.vehicleId){
-        const firstOk=state.data.vehicles.find(v=>vehicleAvailable(v.id,draft.date,draft.startTime,draft.endTime));
-        draft.vehicleId=firstOk?firstOk.id:null;
-      }
+      if(draft.transportMode==="own" && !draft.vehicleId){ draft.vehicleId="REQUEST"; } // default to dispatch request
       draw();
     });
     const veh=modal.querySelector("#mVeh"); if(veh) veh.onchange=e=>draft.vehicleId=e.target.value;
@@ -720,7 +726,8 @@ function openModal(dateStr,timeStr,existing){
     if(veh){ veh.innerHTML=vehicleOptions(); veh.onchange=e=>draft.vehicleId=e.target.value; }
   }
   function vehicleOptions(){
-    return `<option value="">${esc(t("selectVehicle"))}</option>`+state.data.vehicles.map(v=>{
+    const reqSel = (!draft.vehicleId || draft.vehicleId==="REQUEST") ? "selected" : "";
+    return `<option value="REQUEST" ${reqSel}>${esc(t("requestVehicle"))}</option>`+state.data.vehicles.map(v=>{
       const ok=vehicleAvailable(v.id,draft.date,draft.startTime,draft.endTime);
       const rlabel=ok?"":" ("+t("blockedBy")+")";
       return `<option value="${v.id}" ${v.id===draft.vehicleId?"selected":""} ${ok?"":"disabled"}>${esc(v.name)} — ${esc(v.type)}${rlabel}</option>`;
@@ -758,15 +765,17 @@ function openModal(dateStr,timeStr,existing){
     if(!(draft.endTime>draft.startTime)) return show(t("err_time"));
     if(!draft.transportMode) return show(t("err_transport"));
     if(draft.transportMode==="own"){
-      if(!draft.vehicleId) return show(t("err_vehicle"));
-      const s=timeToMin(draft.startTime), e=timeToMin(draft.endTime), dur=e-s;
-      const busy=busyIntervals(draft.vehicleId,draft.date,draft.id);
-      if(busy.some(([bs,be])=>overlapMin(s,e,bs,be))){
-        const ns=findFreeSlot(busy,s,dur,DAY_START*60,DAY_END*60);
-        if(ns==null) return show(t("err_novehicletime"));
-        draft.startTime=minToTime(ns); draft.endTime=minToTime(ns+dur);
-        draft._notice=t("warn_adjusted").replace("{t}",draft.startTime+"–"+draft.endTime);
-        return draw();
+      if(!draft.vehicleId) draft.vehicleId="REQUEST";
+      if(draft.vehicleId!=="REQUEST"){ // a specific vehicle is assigned → check conflicts
+        const s=timeToMin(draft.startTime), e=timeToMin(draft.endTime), dur=e-s;
+        const busy=busyIntervals(draft.vehicleId,draft.date,draft.id);
+        if(busy.some(([bs,be])=>overlapMin(s,e,bs,be))){
+          const ns=findFreeSlot(busy,s,dur,DAY_START*60,DAY_END*60);
+          if(ns==null) return show(t("err_novehicletime"));
+          draft.startTime=minToTime(ns); draft.endTime=minToTime(ns+dur);
+          draft._notice=t("warn_adjusted").replace("{t}",draft.startTime+"–"+draft.endTime);
+          return draw();
+        }
       }
     }
     if(!draft.destinations.some(d=>d.place.trim())) return show(t("err_place"));
@@ -807,15 +816,16 @@ function renderApprovals(){
   if(!P("apprView")){
     app.innerHTML=`<div class="notice">${esc(t("accessDenied"))}</div>`; return;
   }
-  const canAct=P("apprEdit"), canEdit=P("resvEdit");
+  const canAct=P("apprEdit"), canEdit=P("resvEdit"), canEditPending=P("apprEdit")||P("resvEdit");
   const info=r=>`<b>${esc(transportLabel(r))} · ${esc(r.userName)}</b>
       <div class="hint">${esc(r.date)} · ${r.startTime}–${r.endTime}${r.destinations.length?" · "+esc(r.destinations.map(d=>d.place).join(", ")):""}</div>`;
 
   const pend=state.data.reservations.filter(r=>r.status==="pending")
     .sort((a,b)=>(a.date+a.startTime).localeCompare(b.date+b.startTime));
   const pendRows = pend.length? pend.map(r=>`<div class="approvrow">
-      <div class="apinfo" ${canEdit?`data-edit="${r.id}" style="cursor:pointer"`:""}>${info(r)}</div>
-      ${canAct?`<div class="row">
+      <div class="apinfo" ${canEditPending?`data-edit="${r.id}" style="cursor:pointer"`:""}>${info(r)}</div>
+      ${canAct?`<div class="row" style="flex-wrap:wrap;gap:6px">
+        <button data-edit="${r.id}">${esc(t("editAssign"))}</button>
         <button class="primary" data-act="approve" data-id="${r.id}">${esc(t("approve"))}</button>
         <button class="danger" data-act="reject" data-id="${r.id}">${esc(t("reject"))}</button>
       </div>`:""}
@@ -837,9 +847,10 @@ function renderApprovals(){
     e.stopPropagation();
     const r=state.data.reservations.find(x=>x.id===b.dataset.id); if(!r) return;
     const slot = isAdmin()?"admin":"fleet";
-    if(b.dataset.act==="reject"){ r.approvals[slot]=false; r.status="rejected"; }
-    else{ r.approvals[slot]=true; r.status="confirmed"; }
-    r.decidedAt=Date.now();
+    if(b.dataset.act==="reject"){ r.approvals[slot]=false; r.status="rejected"; r.decidedAt=Date.now(); save(); renderApprovals(); return; }
+    // approve: a dispatch request must have a vehicle assigned first → open editor to assign
+    if(r.transportMode==="own" && (!r.vehicleId || r.vehicleId==="REQUEST")){ toast(t("assignFirst")); openModal(r.date,r.startTime,r); return; }
+    r.approvals[slot]=true; r.status="confirmed"; r.decidedAt=Date.now();
     save(); renderApprovals();
   });
   app.querySelectorAll("[data-edit]").forEach(el=>el.onclick=()=>{
