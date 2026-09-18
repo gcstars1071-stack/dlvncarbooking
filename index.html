@@ -187,8 +187,7 @@ let fbDoc = null; // Firestore document reference when shared mode is on
    Example: chatId:"7331592111,-1001234567890"   Leave as PASTE to disable.
    ===================================================================== */
 const TELEGRAM = { botToken:"8991106354:AAErJCox_xd7ah_dVWcYlG2_NSjPuG6Uh_M", chatId:"-5375971481" };
-const USE_TELEGRAM = !!TELEGRAM.botToken && !TELEGRAM.botToken.startsWith("PASTE")
-  && !!TELEGRAM.chatId && !String(TELEGRAM.chatId).startsWith("PASTE");
+const USE_TELEGRAM = !!TELEGRAM.botToken && !TELEGRAM.botToken.startsWith("PASTE");
 
 /* ---------------- i18n ---------------- */
 const I18N = {
@@ -246,6 +245,13 @@ const I18N = {
     perm_seeDetails:"See destination details", perm_calCreate:"Submit reservations",
     perm_resvEdit:"Edit / delete reservations", perm_apprView:"View approvals", perm_apprEdit:"Approve / reject",
     perm_vehView:"View vehicles", perm_vehEdit:"Manage vehicles", perm_repView:"View reports",
+    nav_alerts:"Alerts", al_title:"Telegram recipients",
+    al_desc:"Group members receive alerts automatically. Add individual recipients below.",
+    al_group:"Group", al_name:"Name", al_chatid:"Telegram chat ID", al_add:"Add",
+    al_fetch:"Load people who messaged the bot",
+    al_fetchHint:"Ask the person to send any message to the bot first, then load and add.",
+    al_none:"No individual recipients yet.", al_noNew:"No new senders found.",
+    err_chatid:"Enter a numeric chat ID.",
     weekdays:["Mon","Tue","Wed","Thu","Fri","Sat","Sun"], locale:"en-US"
   },
   vi:{
@@ -302,6 +308,13 @@ const I18N = {
     perm_seeDetails:"Xem chi tiết điểm đến", perm_calCreate:"Gửi yêu cầu đặt xe",
     perm_resvEdit:"Sửa / xóa lịch", perm_apprView:"Xem phê duyệt", perm_apprEdit:"Duyệt / từ chối",
     perm_vehView:"Xem xe", perm_vehEdit:"Quản lý xe", perm_repView:"Xem báo cáo",
+    nav_alerts:"Thông báo", al_title:"Người nhận Telegram",
+    al_desc:"Thành viên nhóm nhận thông báo tự động. Thêm người nhận riêng bên dưới.",
+    al_group:"Nhóm", al_name:"Tên", al_chatid:"Telegram chat ID", al_add:"Thêm",
+    al_fetch:"Tải người đã nhắn cho bot",
+    al_fetchHint:"Nhờ người đó gửi tin nhắn bất kỳ cho bot trước, rồi tải và thêm.",
+    al_none:"Chưa có người nhận riêng.", al_noNew:"Không có người gửi mới.",
+    err_chatid:"Nhập chat ID dạng số.",
     weekdays:["T2","T3","T4","T5","T6","T7","CN"], locale:"vi-VN"
   }
 };
@@ -392,7 +405,7 @@ function seed(){
     {id:"driver",password:hashPw("driver"),name:"Driver",isAdmin:false,
       perms:{seeDetails:true,calCreate:true,resvEdit:false,apprView:false,apprEdit:false,vehView:false,vehEdit:false,repView:true}}
   ];
-  return {vehicles,reservations,accounts};
+  return {vehicles,reservations,accounts,telegramRecipients:[]};
 }
 
 /* ---------------- domain logic ---------------- */
@@ -446,7 +459,11 @@ function notifyTelegram(r){
     "• Status: pending — needs approval"
   ].filter(Boolean);
   const text=lines.join("\n");
-  const recipients=String(TELEGRAM.chatId).split(",").map(s=>s.trim()).filter(Boolean);
+  const ids=new Set();
+  const g=String(TELEGRAM.chatId||""); // optional group id(s) hardcoded in config
+  if(g && !g.startsWith("PASTE")) g.split(",").map(s=>s.trim()).filter(Boolean).forEach(x=>ids.add(x));
+  (state.data.telegramRecipients||[]).forEach(r=>{ if(r&&r.id) ids.add(String(r.id).trim()); }); // admin-registered individuals
+  const recipients=[...ids];
   recipients.forEach(id=>{
     try{
       fetch("https://api.telegram.org/bot"+TELEGRAM.botToken+"/sendMessage",{
@@ -513,6 +530,7 @@ function render(){
   if(state.view==="vehicles" && !P("vehView")) state.view="month";
   if(state.view==="reports" && !P("repView")) state.view="month";
   if(state.view==="users" && !isAdmin()) state.view="month";
+  if(state.view==="alerts" && !isAdmin()) state.view="month";
   renderUserArea();
   renderTabs();
   if(state.view==="month") renderMonth();
@@ -521,6 +539,7 @@ function render(){
   else if(state.view==="vehicles") renderVehicles();
   else if(state.view==="reports") renderReports();
   else if(state.view==="users") renderUsers();
+  else if(state.view==="alerts") renderAlerts();
 }
 
 function renderUserArea(){
@@ -542,7 +561,8 @@ function renderTabs(){
   if(P("vehView")) tabs.push(["vehicles","nav_vehicles"]);
   if(P("repView")) tabs.push(["reports","nav_reports"]);
   if(isAdmin()) tabs.push(["users","nav_users"]);
-  const cur = ["approvals","vehicles","reports","users"].includes(state.view)?state.view:"calendar";
+  if(isAdmin() && USE_TELEGRAM) tabs.push(["alerts","nav_alerts"]);
+  const cur = ["approvals","vehicles","reports","users","alerts"].includes(state.view)?state.view:"calendar";
   document.getElementById("tabs").innerHTML=tabs.map(([v,k])=>
     `<button data-tab="${v}" class="${cur===v?"active":""}">${esc(t(k))}</button>`).join("");
   document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>{
@@ -1099,6 +1119,61 @@ function buildReportText(wsStr,weStr,items,totalMin,ownTrips,modeCount,vehMin,sh
   });
   if(!items.length) L.push(t("rp_none"));
   return L.join("\n");
+}
+
+/* ---------------- Telegram recipients (admin-managed, stored in Firestore) ---------------- */
+function renderAlerts(){
+  if(!isAdmin()){ app.innerHTML=`<div class="notice">${esc(t("accessDenied"))}</div>`; return; }
+  if(!Array.isArray(state.data.telegramRecipients)) state.data.telegramRecipients=[];
+  const recs=state.data.telegramRecipients;
+  const groupId=(String(TELEGRAM.chatId||"").startsWith("PASTE"))?"":String(TELEGRAM.chatId||"");
+  const rows = recs.length? recs.map((r,i)=>`<tr>
+      <td><b>${esc(r.name||"")}</b></td><td class="hint">${esc(String(r.id))}</td>
+      <td><button class="danger" data-delrec="${i}">${esc(t("remove"))}</button></td></tr>`).join("")
+    : `<tr><td colspan="3" class="muted">${esc(t("al_none"))}</td></tr>`;
+  app.innerHTML=`
+    <h2 style="font-size:17px;margin:0 0 4px">${esc(t("al_title"))}</h2>
+    <p class="hint" style="margin:0 0 4px">${esc(t("al_desc"))}</p>
+    ${groupId?`<p class="hint" style="margin:0 0 12px">${esc(t("al_group"))}: ${esc(groupId)}</p>`:""}
+    <div class="card" style="margin-bottom:12px">
+      <div class="row" style="flex-wrap:wrap;gap:8px">
+        <input type="text" id="alName" placeholder="${esc(t("al_name"))}" style="flex:1;min-width:120px">
+        <input type="text" id="alId" placeholder="${esc(t("al_chatid"))}" style="flex:1;min-width:140px">
+        <button id="alAdd" class="primary">${esc(t("al_add"))}</button>
+      </div>
+      <div class="err" id="alErr" hidden></div>
+    </div>
+    <div class="row" style="gap:10px;margin-bottom:8px">
+      <button id="alFetch">${esc(t("al_fetch"))}</button>
+      <span class="hint">${esc(t("al_fetchHint"))}</span>
+    </div>
+    <div id="alFetchList" style="margin-bottom:12px"></div>
+    <div class="tablewrap"><table class="vt">
+      <thead><tr><th>${esc(t("al_name"))}</th><th>${esc(t("al_chatid"))}</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+  const addRec=(name,id)=>{
+    id=String(id).trim(); name=(name||"").trim();
+    if(!/^-?\d+$/.test(id)){ const e=document.getElementById("alErr"); e.textContent=t("err_chatid"); e.hidden=false; return false; }
+    if(!recs.some(r=>String(r.id)===id)) recs.push({name:name||id,id});
+    save(); renderAlerts(); return true;
+  };
+  document.getElementById("alAdd").onclick=()=>addRec(document.getElementById("alName").value,document.getElementById("alId").value);
+  app.querySelectorAll("[data-delrec]").forEach(b=>b.onclick=()=>{ recs.splice(+b.dataset.delrec,1); save(); renderAlerts(); });
+  document.getElementById("alFetch").onclick=async()=>{
+    const list=document.getElementById("alFetchList");
+    list.innerHTML=`<span class="hint">…</span>`;
+    try{
+      const g=await (await fetch("https://api.telegram.org/bot"+TELEGRAM.botToken+"/getUpdates?_="+Date.now())).json();
+      const seen={};
+      (g.result||[]).forEach(u=>{ const c=(u.message||{}).chat; if(c && c.type==="private"){ seen[c.id]={id:String(c.id), name:[c.first_name,c.last_name].filter(Boolean).join(" ")||c.username||String(c.id)}; } });
+      const news=Object.values(seen).filter(s=>!recs.some(r=>String(r.id)===s.id));
+      list.innerHTML = news.length? news.map(s=>`<div class="approvrow"><div><b>${esc(s.name)}</b> <span class="hint">${esc(s.id)}</span></div>
+        <button class="primary" data-addnew="${esc(s.id)}" data-nm="${esc(s.name)}">${esc(t("al_add"))}</button></div>`).join("")
+        : `<div class="notice">${esc(t("al_noNew"))}</div>`;
+      list.querySelectorAll("[data-addnew]").forEach(b=>b.onclick=()=>addRec(b.dataset.nm,b.dataset.addnew));
+    }catch(e){ list.innerHTML=`<div class="notice">${esc(String(e))}</div>`; }
+  };
 }
 
 /* ---------------- toast ---------------- */
