@@ -189,7 +189,9 @@ const I18N = {
     newResv:"New reservation", editResv:"Edit reservation", del:"Delete",
     f_status:"Status", confirmDelete:"Delete this reservation?",
     f_user:"User name", f_time:"Usage time", f_start:"Start", f_end:"End",
-    f_transport:"Transport", f_vehicle:"Vehicle", f_dest:"Destination and details",
+    f_transport:"Transport", f_vehicle:"Vehicle", f_dest:"Trip (From / To / Detail)",
+    f_from:"From", f_to:"To", f_detail:"Detail", f_mapUrl:"Map link (optional)",
+    f_passengers:"Passenger", addPassenger:"Add passenger",
     f_place:"Destination", f_note:"Details", addDest:"Add destination", save:"Save", cancel:"Cancel",
     t_own:"Company car", t_xanh:"Xanh SM", t_rent:"Rent car",
     rentHint:"Enter 2+ destinations to unlock Rent car.",
@@ -212,7 +214,7 @@ const I18N = {
     emptyDay:"No time selected.", clickBook:"+ Click to reserve",
     err_user:"Enter a user name.", err_time:"End time must be after start.",
     err_transport:"Select a transport option.", err_vehicle:"Select a vehicle.",
-    err_place:"Enter at least one destination.",
+    err_place:"Enter a destination (To).",
     err_vname:"Enter a vehicle name.", err_block:"Enter valid from/to times.",
     err_novehicletime:"No free time for this vehicle on this day.",
     warn_adjusted:"Vehicle already booked — time moved to {t}. Review and save.",
@@ -243,7 +245,9 @@ const I18N = {
     newResv:"Đặt xe mới", editResv:"Sửa lịch", del:"Xóa",
     f_status:"Trạng thái", confirmDelete:"Xóa lịch này?",
     f_user:"Tên người dùng", f_time:"Thời gian sử dụng", f_start:"Bắt đầu", f_end:"Kết thúc",
-    f_transport:"Phương tiện", f_vehicle:"Xe", f_dest:"Điểm đến và nội dung",
+    f_transport:"Phương tiện", f_vehicle:"Xe", f_dest:"Hành trình (Đi / Đến / Nội dung)",
+    f_from:"Điểm đi", f_to:"Điểm đến", f_detail:"Nội dung", f_mapUrl:"Link bản đồ (tùy chọn)",
+    f_passengers:"Người đi cùng", addPassenger:"Thêm người",
     f_place:"Điểm đến", f_note:"Nội dung", addDest:"Thêm điểm đến", save:"Lưu", cancel:"Hủy",
     t_own:"Xe công ty", t_xanh:"Xanh SM", t_rent:"Xe thuê",
     rentHint:"Nhập từ 2 điểm đến để mở khóa Xe thuê.",
@@ -266,7 +270,7 @@ const I18N = {
     emptyDay:"Chưa chọn giờ.", clickBook:"+ Nhấn để đặt",
     err_user:"Nhập tên người dùng.", err_time:"Giờ kết thúc phải sau giờ bắt đầu.",
     err_transport:"Chọn phương tiện.", err_vehicle:"Chọn xe.",
-    err_place:"Nhập ít nhất một điểm đến.",
+    err_place:"Nhập điểm đến (Đến).",
     err_vname:"Nhập tên xe.", err_block:"Nhập thời gian hợp lệ.",
     err_novehicletime:"Xe không còn thời gian trống trong ngày này.",
     warn_adjusted:"Xe đã được đặt — đã đổi giờ thành {t}. Kiểm tra và lưu.",
@@ -355,14 +359,19 @@ function seed(){
   ];
   const reservations=[
     {id:uid(),date:today,startTime:"09:00",endTime:"12:00",userName:"Kim",
-      transportMode:"own",vehicleId:"v1",destinations:[{place:"Hanoi plant",note:"Pick up parts"}],
+      transportMode:"own",vehicleId:"v1",
+      destinations:[{from:"Office",fromUrl:"",to:"Hanoi plant",toUrl:"",detail:"Pick up parts"}],
+      passengers:["Choi"],
       status:"confirmed",approvals:{admin:true,fleet:true},createdAt:Date.now()},
     {id:uid(),date:today,startTime:"14:00",endTime:"15:00",userName:"Park",
       transportMode:"xanh",vehicleId:null,
-      destinations:[{place:"Airport",note:"Guest pickup"},{place:"Office",note:"Return"}],
+      destinations:[{from:"Office",fromUrl:"",to:"Airport",toUrl:"",detail:"Guest pickup"},{from:"Airport",fromUrl:"",to:"Office",toUrl:"",detail:"Return"}],
+      passengers:[],
       status:"pending",approvals:{admin:null,fleet:null},createdAt:Date.now()},
     {id:uid(),date:tomo,startTime:"10:00",endTime:"11:30",userName:"Le",
-      transportMode:"own",vehicleId:"v2",destinations:[{place:"Warehouse",note:"Delivery"}],
+      transportMode:"own",vehicleId:"v2",
+      destinations:[{from:"Office",fromUrl:"",to:"Warehouse",toUrl:"",detail:"Delivery"}],
+      passengers:["Han","Vo"],
       status:"confirmed",approvals:{admin:true,fleet:true},createdAt:Date.now()}
   ];
   const accounts=[
@@ -400,6 +409,19 @@ function transportLabel(r){
   if(r.transportMode==="xanh") return t("t_xanh");
   return t("t_rent");
 }
+/* ---- trip leg rendering (From/To/Detail, backward-compatible with old {place,note}) ---- */
+function isUrl(s){ return typeof s==="string" && /^https?:\/\//i.test(s.trim()); }
+function placeHtml(name,url){ const n=esc(name||""); return isUrl(url)?`<a href="${esc(url.trim())}" target="_blank" rel="noopener">${n||esc(url.trim())}</a>`:n; }
+function legPlain(d){
+  if(d.to||d.from){ const f=d.from||"", to=d.to||""; let s=(f&&to)?f+" → "+to:(to||f); if(d.detail) s+=" ("+d.detail+")"; return s; }
+  return (d.place||"")+(d.note?" ("+d.note+")":""); // old records
+}
+function legHtml(d){
+  if(d.to||d.from){ const f=placeHtml(d.from,d.fromUrl), to=placeHtml(d.to,d.toUrl);
+    let s=(d.from&&d.to)?f+" → "+to:(d.to?to:f); if(d.detail) s+=" <span class='muted'>("+esc(d.detail)+")</span>"; return s; }
+  return esc(d.place||"")+(d.note?" <span class='muted'>("+esc(d.note)+")</span>":""); // old records
+}
+function paxText(r){ return (r.passengers&&r.passengers.length)? r.passengers.filter(Boolean).join(", "):""; }
 function vehicleAvailable(vehicleId,dateStr,startTime,endTime){
   const v=vehicleById(vehicleId); if(!v) return true;
   const s=dt(dateStr,startTime), e=dt(dateStr,endTime);
@@ -523,7 +545,7 @@ function renderMonth(){
   const todays=visibleReservations(todayStr);
   const todayList = todays.length ? todays.map(r=>`<div class="row" style="justify-content:space-between;gap:8px;border-top:1px solid var(--border);padding:8px 0">
       <div><b>${esc(transportLabel(r))}</b> · ${esc(r.userName)} <span class="hint">${r.startTime}–${r.endTime}</span>
-      ${canSeeDetails()&&r.destinations.length?`<div class="hint">${esc(r.destinations.map(d=>d.place).join(", "))}</div>`:""}</div>
+      ${canSeeDetails()&&(r.destinations.length||paxText(r))?`<div class="hint">${r.destinations.map(legHtml).join(", ")}${paxText(r)?" · 👥 "+esc(paxText(r)):""}</div>`:""}</div>
       <span class="badge ${r.status}">${esc(t("st_"+r.status))}</span></div>`).join("")
     : `<p class="hint" style="margin:8px 0 0">${esc(t("noToday"))}</p>`;
 
@@ -621,8 +643,8 @@ function renderDay(){
   });
 }
 function evtInner(r){
-  const details = canSeeDetails() && r.destinations.length
-    ? `<div class="hint" style="margin-top:2px">${r.destinations.map(d=>esc(d.place)+(d.note?" · "+esc(d.note):"")).join(" / ")}</div>` : "";
+  const details = canSeeDetails() && (r.destinations.length || paxText(r))
+    ? `<div class="hint" style="margin-top:2px">${r.destinations.map(legHtml).join(" / ")}${paxText(r)?" · 👥 "+esc(paxText(r)):""}</div>` : "";
   return `<div class="row" style="justify-content:space-between;gap:6px;align-items:flex-start">
       <b>${esc(transportLabel(r))} · ${esc(r.userName)}</b>
       <span class="badge ${r.status}">${esc(t("st_"+r.status))}</span></div>
@@ -633,8 +655,10 @@ function evtInner(r){
 function openModal(dateStr,timeStr,existing){
   const draft = existing ? JSON.parse(JSON.stringify(existing)) : {
     id:null,date:dateStr,startTime:timeStr,endTime:minToTime(Math.min(DAY_END*60,timeToMin(timeStr)+60)),userName:"",
-    transportMode:null,vehicleId:null,destinations:[{place:"",note:""}]
+    transportMode:null,vehicleId:null,destinations:[{from:"",fromUrl:"",to:"",toUrl:"",detail:""}],passengers:["",""]
   };
+  if(!Array.isArray(draft.destinations)||!draft.destinations.length) draft.destinations=[{from:"",fromUrl:"",to:"",toUrl:"",detail:""}];
+  if(!Array.isArray(draft.passengers)) draft.passengers=["",""];
   // editing existing needs resvEdit, OR apprEdit while the item is still pending (assign/adjust during approval)
   const canEdit = existing ? (P("resvEdit") || (P("apprEdit") && existing.status==="pending")) : true;
   const ov=document.createElement("div"); ov.className="overlay";
@@ -647,7 +671,7 @@ function openModal(dateStr,timeStr,existing){
     let o=""; for(let m=DAY_START*60;m<=DAY_END*60;m+=15){const v=minToTime(m); o+=`<option value="${v}" ${v===sel?"selected":""}>${v}</option>`;}
     return o;
   }
-  function destCount(){ return draft.destinations.filter(d=>d.place.trim()).length; }
+  function destCount(){ return draft.destinations.filter(d=>(d.to||d.place||"").trim()).length; }
 
   function draw(){
     if(existing && !canEdit){ drawReadOnly(); return; }
@@ -680,6 +704,10 @@ function openModal(dateStr,timeStr,existing){
         <div id="destList"></div>
         <button id="addDest" class="ghost" style="padding:4px 8px">＋ ${esc(t("addDest"))}</button>
       </div>
+      <div class="field"><label>${esc(t("f_passengers"))}</label>
+        <div id="paxList"></div>
+        <button id="addPax" class="ghost" style="padding:4px 8px">＋ ${esc(t("addPassenger"))}</button>
+      </div>
       ${existing?`<div class="field"><label>${esc(t("f_status"))}</label>
         <div class="seg" id="mStatus">
           ${["pending","confirmed","rejected"].map(s=>`<button data-st="${s}" class="${draft.status===s?'sel':''}">${esc(t("st_"+s))}</button>`).join("")}
@@ -690,7 +718,7 @@ function openModal(dateStr,timeStr,existing){
         <button id="mCancel">${esc(t("cancel"))}</button>
         <button id="mSave" class="primary">${esc(t("save"))}</button>
       </div>`;
-    drawDest();
+    drawDest(); drawPax();
     if(existing){
       modal.querySelectorAll("#mStatus button").forEach(b=>b.onclick=()=>{ draft.status=b.dataset.st; draw(); });
       const delBtn=modal.querySelector("#mDelete");
@@ -716,7 +744,8 @@ function openModal(dateStr,timeStr,existing){
       draw();
     });
     const veh=modal.querySelector("#mVeh"); if(veh) veh.onchange=e=>draft.vehicleId=e.target.value;
-    modal.querySelector("#addDest").onclick=()=>{draft.destinations.push({place:"",note:""}); draw();};
+    modal.querySelector("#addDest").onclick=()=>{draft.destinations.push({from:"",fromUrl:"",to:"",toUrl:"",detail:""}); draw();};
+    modal.querySelector("#addPax").onclick=()=>{draft.passengers.push(""); draw();};
     modal.querySelector("#mCancel").onclick=()=>ov.remove();
     modal.querySelector("#mSave").onclick=onSave;
     if(draft._notice){const el=modal.querySelector("#mErr");el.textContent=draft._notice;el.style.color="var(--warn)";el.hidden=false;delete draft._notice;}
@@ -736,19 +765,35 @@ function openModal(dateStr,timeStr,existing){
   function drawDest(){
     const list=modal.querySelector("#destList");
     list.innerHTML=draft.destinations.map((d,i)=>`
-      <div class="destrow">
-        <input type="text" data-i="${i}" data-k="place" value="${esc(d.place)}" placeholder="${esc(t("f_place"))}">
-        <input type="text" data-i="${i}" data-k="note" value="${esc(d.note)}" placeholder="${esc(t("f_note"))}">
-        ${draft.destinations.length>1?`<button class="ghost danger" data-del="${i}" style="min-width:auto;padding:4px 8px">✕</button>`:""}
+      <div style="border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:8px">
+        <div class="row" style="justify-content:space-between;margin-bottom:4px">
+          <span class="hint">#${i+1}</span>
+          ${draft.destinations.length>1?`<button class="ghost danger" data-del="${i}" style="min-width:auto;padding:0 6px">✕</button>`:""}
+        </div>
+        <div class="destrow"><input type="text" data-i="${i}" data-k="from" value="${esc(d.from||d.place||"")}" placeholder="${esc(t("f_from"))}">
+          <input type="text" data-i="${i}" data-k="fromUrl" value="${esc(d.fromUrl||"")}" placeholder="${esc(t("f_mapUrl"))}"></div>
+        <div class="destrow"><input type="text" data-i="${i}" data-k="to" value="${esc(d.to||"")}" placeholder="${esc(t("f_to"))}">
+          <input type="text" data-i="${i}" data-k="toUrl" value="${esc(d.toUrl||"")}" placeholder="${esc(t("f_mapUrl"))}"></div>
+        <div class="destrow"><input type="text" data-i="${i}" data-k="detail" value="${esc(d.detail||d.note||"")}" placeholder="${esc(t("f_detail"))}"></div>
       </div>`).join("");
     list.querySelectorAll("input").forEach(inp=>inp.oninput=e=>{
       draft.destinations[+e.target.dataset.i][e.target.dataset.k]=e.target.value;
-      // re-eval rent lock without full redraw losing focus: only redraw seg area
-      updateRentLock();
+      updateRentLock(); // re-eval rent lock without losing focus
     });
     list.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{
       draft.destinations.splice(+b.dataset.del,1); draw();
     });
+  }
+  function drawPax(){
+    const list=modal.querySelector("#paxList");
+    while(draft.passengers.length<2) draft.passengers.push("");
+    list.innerHTML=draft.passengers.map((p,i)=>`
+      <div class="destrow">
+        <input type="text" data-pi="${i}" value="${esc(p)}" placeholder="${esc(t("f_passengers"))} ${i+1}">
+        ${draft.passengers.length>2?`<button class="ghost danger" data-pdel="${i}" style="min-width:auto;padding:4px 8px">✕</button>`:""}
+      </div>`).join("");
+    list.querySelectorAll("input").forEach(inp=>inp.oninput=e=>{ draft.passengers[+e.target.dataset.pi]=e.target.value; });
+    list.querySelectorAll("[data-pdel]").forEach(b=>b.onclick=()=>{ draft.passengers.splice(+b.dataset.pdel,1); draw(); });
   }
   function updateRentLock(){
     const unlocked=destCount()>=2;
@@ -778,8 +823,9 @@ function openModal(dateStr,timeStr,existing){
         }
       }
     }
-    if(!draft.destinations.some(d=>d.place.trim())) return show(t("err_place"));
-    draft.destinations=draft.destinations.filter(d=>d.place.trim());
+    if(!draft.destinations.some(d=>(d.to||d.from||d.place||"").trim())) return show(t("err_place"));
+    draft.destinations=draft.destinations.filter(d=>(d.from||d.to||d.detail||d.fromUrl||d.toUrl||d.place||d.note||"").toString().trim());
+    draft.passengers=(draft.passengers||[]).map(s=>(s||"").trim()).filter(Boolean);
     if(draft.transportMode!=="own") draft.vehicleId=null;
     if(existing){
       const idx=state.data.reservations.findIndex(x=>x.id===draft.id);
@@ -798,13 +844,16 @@ function openModal(dateStr,timeStr,existing){
   function drawReadOnly(){
     const r=existing;
     const dest = canSeeDetails()
-      ? r.destinations.map(d=>`<li>${esc(d.place)}${d.note?" — "+esc(d.note):""}</li>`).join("")
+      ? (r.destinations||[]).map(d=>`<li>${legHtml(d)}</li>`).join("")
       : `<li class="muted">${esc(t("hiddenNote"))}</li>`;
+    const pax = canSeeDetails() && paxText(r)
+      ? `<div class="field"><label>${esc(t("f_passengers"))}</label><div>${esc(paxText(r))}</div></div>` : "";
     modal.innerHTML=`
       <h3>${esc(transportLabel(r))} · ${esc(r.userName)}</h3>
       <p class="muted" style="margin:0 0 10px">${esc(r.date)} · ${r.startTime}–${r.endTime}
         <span class="badge ${r.status}" style="margin-left:6px">${esc(t("st_"+r.status))}</span></p>
       <div class="field"><label>${esc(t("f_dest"))}</label><ul style="margin:4px 0 0;padding-left:18px">${dest}</ul></div>
+      ${pax}
       <div class="actions"><button id="roClose" class="primary">${esc(t("cancel"))}</button></div>`;
     modal.querySelector("#roClose").onclick=()=>ov.remove();
   }
@@ -818,7 +867,7 @@ function renderApprovals(){
   }
   const canAct=P("apprEdit"), canEdit=P("resvEdit"), canEditPending=P("apprEdit")||P("resvEdit");
   const info=r=>`<b>${esc(transportLabel(r))} · ${esc(r.userName)}</b>
-      <div class="hint">${esc(r.date)} · ${r.startTime}–${r.endTime}${r.destinations.length?" · "+esc(r.destinations.map(d=>d.place).join(", ")):""}</div>`;
+      <div class="hint">${esc(r.date)} · ${r.startTime}–${r.endTime}${r.destinations.length?" · "+esc(r.destinations.map(legPlain).join(", ")):""}${paxText(r)?" · 👥 "+esc(paxText(r)):""}</div>`;
 
   const pend=state.data.reservations.filter(r=>r.status==="pending")
     .sort((a,b)=>(a.date+a.startTime).localeCompare(b.date+b.startTime));
@@ -961,7 +1010,7 @@ function renderReports(){
   const showDest=canSeeDetails();
   const rows=items.length? items.map(r=>{
     const wd=I18N[state.lang].weekdays[(new Date(r.date+"T00:00").getDay()+6)%7];
-    const dest=showDest? esc(r.destinations.map(d=>d.place).join(", ")):"";
+    const dest=showDest? esc(r.destinations.map(legPlain).join(", ")+(paxText(r)?" · 👥 "+paxText(r):"")):"";
     return `<tr>
       <td>${esc(r.date)} <span class="hint">${esc(wd)}</span></td>
       <td>${esc(r.userName)}</td>
@@ -1010,7 +1059,8 @@ function buildReportText(wsStr,weStr,items,totalMin,ownTrips,modeCount,vehMin,sh
   L.push("");
   items.forEach(r=>{
     let line=`${r.date} ${r.startTime}-${r.endTime}  ${r.userName}  ${transportLabel(r)}  [${t("st_"+r.status)}]`;
-    if(showDest && r.destinations.length) line+=`  ${r.destinations.map(d=>d.place+(d.note?"("+d.note+")":"")).join(", ")}`;
+    if(showDest && r.destinations.length) line+=`  ${r.destinations.map(legPlain).join(", ")}`;
+    if(showDest && paxText(r)) line+=`  [${paxText(r)}]`;
     L.push(line);
   });
   if(!items.length) L.push(t("rp_none"));
