@@ -179,6 +179,15 @@ const firebaseConfig = {
 const USE_FIREBASE = !!firebaseConfig.apiKey && !firebaseConfig.apiKey.startsWith("PASTE");
 let fbDoc = null; // Firestore document reference when shared mode is on
 
+/* =====================================================================
+   TELEGRAM ALERTS (optional) — notify a designated admin chat when a new
+   reservation is submitted. Create a bot with @BotFather to get the token,
+   and get your chat id (see instructions). Leave as PASTE to disable.
+   ===================================================================== */
+const TELEGRAM = { botToken:"8991106354:AAErJCox_xd7ah_dVWcYlG2_NSjPuG6Uh_M", chatId:"7331592111" };
+const USE_TELEGRAM = !!TELEGRAM.botToken && !TELEGRAM.botToken.startsWith("PASTE")
+  && !!TELEGRAM.chatId && !String(TELEGRAM.chatId).startsWith("PASTE");
+
 /* ---------------- i18n ---------------- */
 const I18N = {
   en:{
@@ -422,6 +431,24 @@ function legHtml(d){
   return esc(d.place||"")+(d.note?" <span class='muted'>("+esc(d.note)+")</span>":""); // old records
 }
 function paxText(r){ return (r.passengers&&r.passengers.length)? r.passengers.filter(Boolean).join(", "):""; }
+/* Telegram alert to the designated admin chat when a new reservation is submitted */
+function notifyTelegram(r){
+  if(!USE_TELEGRAM || !r) return;
+  const lines=[
+    "🚗 New reservation / 새 차량 예약",
+    "• User: "+r.userName,
+    "• Date: "+r.date+"  "+r.startTime+"–"+r.endTime,
+    "• Transport: "+transportLabel(r),
+    (r.destinations&&r.destinations.length? "• Trip: "+r.destinations.map(legPlain).join(", "):""),
+    (paxText(r)? "• Passengers: "+paxText(r):""),
+    "• Status: pending — needs approval"
+  ].filter(Boolean);
+  try{
+    fetch("https://api.telegram.org/bot"+TELEGRAM.botToken+"/sendMessage",{
+      method:"POST", body:new URLSearchParams({chat_id:String(TELEGRAM.chatId), text:lines.join("\n"), disable_web_page_preview:"true"})
+    }).catch(e=>console.warn("Telegram notify failed",e));
+  }catch(e){ console.warn("Telegram notify error",e); }
+}
 function vehicleAvailable(vehicleId,dateStr,startTime,endTime){
   const v=vehicleById(vehicleId); if(!v) return true;
   const s=dt(dateStr,startTime), e=dt(dateStr,endTime);
@@ -804,6 +831,7 @@ function openModal(dateStr,timeStr,existing){
       if(draft.transportMode==="rent"){ draft.transportMode=null; draw(); } }
   }
   function onSave(){
+    let newRec=null;
     const err=modal.querySelector("#mErr");
     const show=m=>{err.textContent=m;err.style.color="var(--danger)";err.hidden=false;};
     if(!draft.userName.trim()) return show(t("err_user"));
@@ -835,11 +863,11 @@ function openModal(dateStr,timeStr,existing){
         state.data.reservations[idx]={...prev,...draft};
       }
     }else{
-      const rec={...draft,id:uid(),status:"pending",approvals:{admin:null,fleet:null},createdAt:Date.now()};
-      state.data.reservations.push(rec);
+      newRec={...draft,id:uid(),status:"pending",approvals:{admin:null,fleet:null},createdAt:Date.now()};
+      state.data.reservations.push(newRec);
     }
     save(); ov.remove(); render();
-    if(!existing) toast(t("savedPending"));
+    if(!existing){ toast(t("savedPending")); notifyTelegram(newRec); }
   }
   function drawReadOnly(){
     const r=existing;
