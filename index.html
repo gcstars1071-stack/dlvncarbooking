@@ -180,11 +180,13 @@ const USE_FIREBASE = !!firebaseConfig.apiKey && !firebaseConfig.apiKey.startsWit
 let fbDoc = null; // Firestore document reference when shared mode is on
 
 /* =====================================================================
-   TELEGRAM ALERTS (optional) — notify a designated admin chat when a new
-   reservation is submitted. Create a bot with @BotFather to get the token,
-   and get your chat id (see instructions). Leave as PASTE to disable.
+   TELEGRAM ALERTS (optional) — notify designated admins when a new
+   reservation is submitted. Create a bot with @BotFather to get the token.
+   chatId can be ONE id, or SEVERAL separated by commas — each personal id
+   (person must /start the bot first) or a group id (negative, bot in group).
+   Example: chatId:"7331592111,-1001234567890"   Leave as PASTE to disable.
    ===================================================================== */
-const TELEGRAM = { botToken:"8991106354:AAErJCox_xd7ah_dVWcYlG2_NSjPuG6Uh_M", chatId:"7331592111" };
+const TELEGRAM = { botToken:"8991106354:AAErJCox_xd7ah_dVWcYlG2_NSjPuG6Uh_M", chatId:"-5375971481" };
 const USE_TELEGRAM = !!TELEGRAM.botToken && !TELEGRAM.botToken.startsWith("PASTE")
   && !!TELEGRAM.chatId && !String(TELEGRAM.chatId).startsWith("PASTE");
 
@@ -443,11 +445,15 @@ function notifyTelegram(r){
     (paxText(r)? "• Passengers: "+paxText(r):""),
     "• Status: pending — needs approval"
   ].filter(Boolean);
-  try{
-    fetch("https://api.telegram.org/bot"+TELEGRAM.botToken+"/sendMessage",{
-      method:"POST", body:new URLSearchParams({chat_id:String(TELEGRAM.chatId), text:lines.join("\n"), disable_web_page_preview:"true"})
-    }).catch(e=>console.warn("Telegram notify failed",e));
-  }catch(e){ console.warn("Telegram notify error",e); }
+  const text=lines.join("\n");
+  const recipients=String(TELEGRAM.chatId).split(",").map(s=>s.trim()).filter(Boolean);
+  recipients.forEach(id=>{
+    try{
+      fetch("https://api.telegram.org/bot"+TELEGRAM.botToken+"/sendMessage",{
+        method:"POST", body:new URLSearchParams({chat_id:id, text, disable_web_page_preview:"true"})
+      }).catch(e=>console.warn("Telegram notify failed",id,e));
+    }catch(e){ console.warn("Telegram notify error",id,e); }
+  });
 }
 function vehicleAvailable(vehicleId,dateStr,startTime,endTime){
   const v=vehicleById(vehicleId); if(!v) return true;
