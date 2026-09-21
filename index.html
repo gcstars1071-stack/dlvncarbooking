@@ -200,7 +200,7 @@ const I18N = {
     f_status:"Status", confirmDelete:"Delete this reservation?",
     f_user:"User name", f_time:"Usage time", f_start:"Start", f_end:"End",
     f_transport:"Transport", f_vehicle:"Vehicle", f_dest:"Trip (From / To / Detail)",
-    f_from:"From", f_to:"To", f_detail:"Detail", f_mapUrl:"Map link (optional)",
+    f_from:"From", f_to:"To", f_detail:"Detail", f_mapUrl:"Map link (optional)", f_dept:"Department",
     f_passengers:"Passenger", addPassenger:"Add passenger",
     f_place:"Destination", f_note:"Details", addDest:"Add destination", save:"Save", cancel:"Cancel",
     t_own:"Company car", t_xanh:"Xanh SM", t_rent:"Rent car",
@@ -241,6 +241,7 @@ const I18N = {
     nav_users:"Users", u_title:"User management", u_add:"Add user", u_edit:"Edit",
     u_id:"ID", u_pw:"Password", u_pwKeep:"(leave blank to keep)", u_name:"Name", u_admin:"Administrator (all access)",
     u_perms:"Page permissions", newUser:"New user", editUser:"Edit user",
+    u_depts:"Departments", u_addDept:"New department",
     err_uid:"Enter an ID.", err_uid_dup:"This ID already exists.", err_upw:"Enter a password.",
     perm_seeDetails:"See destination details", perm_calCreate:"Submit reservations",
     perm_resvEdit:"Edit / delete reservations", perm_apprView:"View approvals", perm_apprEdit:"Approve / reject",
@@ -263,7 +264,7 @@ const I18N = {
     f_status:"Trạng thái", confirmDelete:"Xóa lịch này?",
     f_user:"Tên người dùng", f_time:"Thời gian sử dụng", f_start:"Bắt đầu", f_end:"Kết thúc",
     f_transport:"Phương tiện", f_vehicle:"Xe", f_dest:"Hành trình (Đi / Đến / Nội dung)",
-    f_from:"Điểm đi", f_to:"Điểm đến", f_detail:"Nội dung", f_mapUrl:"Link bản đồ (tùy chọn)",
+    f_from:"Điểm đi", f_to:"Điểm đến", f_detail:"Nội dung", f_mapUrl:"Link bản đồ (tùy chọn)", f_dept:"Phòng ban",
     f_passengers:"Người đi cùng", addPassenger:"Thêm người",
     f_place:"Điểm đến", f_note:"Nội dung", addDest:"Thêm điểm đến", save:"Lưu", cancel:"Hủy",
     t_own:"Xe công ty", t_xanh:"Xanh SM", t_rent:"Xe thuê",
@@ -304,6 +305,7 @@ const I18N = {
     nav_users:"Người dùng", u_title:"Quản lý người dùng", u_add:"Thêm người dùng", u_edit:"Sửa",
     u_id:"ID", u_pw:"Mật khẩu", u_pwKeep:"(để trống nếu giữ nguyên)", u_name:"Tên", u_admin:"Quản trị viên (toàn quyền)",
     u_perms:"Quyền theo trang", newUser:"Người dùng mới", editUser:"Sửa người dùng",
+    u_depts:"Phòng ban", u_addDept:"Phòng ban mới",
     err_uid:"Nhập ID.", err_uid_dup:"ID đã tồn tại.", err_upw:"Nhập mật khẩu.",
     perm_seeDetails:"Xem chi tiết điểm đến", perm_calCreate:"Gửi yêu cầu đặt xe",
     perm_resvEdit:"Sửa / xóa lịch", perm_apprView:"Xem phê duyệt", perm_apprEdit:"Duyệt / từ chối",
@@ -382,17 +384,17 @@ function seed(){
       blocks:[{id:uid(),reason:"repair",start:today+"T13:00",end:today+"T18:00"}]}
   ];
   const reservations=[
-    {id:uid(),date:today,startTime:"09:00",endTime:"12:00",userName:"Kim",
+    {id:uid(),date:today,startTime:"09:00",endTime:"12:00",userName:"Kim",department:"PM",
       transportMode:"own",vehicleId:"v1",
       destinations:[{from:"Office",fromUrl:"",to:"Hanoi plant",toUrl:"",detail:"Pick up parts"}],
       passengers:["Choi"],
       status:"confirmed",approvals:{admin:true,fleet:true},createdAt:Date.now()},
-    {id:uid(),date:today,startTime:"14:00",endTime:"15:00",userName:"Park",
+    {id:uid(),date:today,startTime:"14:00",endTime:"15:00",userName:"Park",department:"AD",
       transportMode:"xanh",vehicleId:null,
       destinations:[{from:"Office",fromUrl:"",to:"Airport",toUrl:"",detail:"Guest pickup"},{from:"Airport",fromUrl:"",to:"Office",toUrl:"",detail:"Return"}],
       passengers:[],
       status:"pending",approvals:{admin:null,fleet:null},createdAt:Date.now()},
-    {id:uid(),date:tomo,startTime:"10:00",endTime:"11:30",userName:"Le",
+    {id:uid(),date:tomo,startTime:"10:00",endTime:"11:30",userName:"Le",department:"PD",
       transportMode:"own",vehicleId:"v2",
       destinations:[{from:"Office",fromUrl:"",to:"Warehouse",toUrl:"",detail:"Delivery"}],
       passengers:["Han","Vo"],
@@ -405,7 +407,7 @@ function seed(){
     {id:"driver",password:hashPw("driver"),name:"Driver",isAdmin:false,
       perms:{seeDetails:true,calCreate:true,resvEdit:false,apprView:false,apprEdit:false,vehView:false,vehEdit:false,repView:true}}
   ];
-  return {vehicles,reservations,accounts,telegramRecipients:[]};
+  return {vehicles,reservations,accounts,telegramRecipients:[],departments:["AD","PM","PD","QM","others"]};
 }
 
 /* ---------------- domain logic ---------------- */
@@ -446,12 +448,15 @@ function legHtml(d){
   return esc(d.place||"")+(d.note?" <span class='muted'>("+esc(d.note)+")</span>":""); // old records
 }
 function paxText(r){ return (r.passengers&&r.passengers.length)? r.passengers.filter(Boolean).join(", "):""; }
+const DEFAULT_DEPTS=["AD","PM","PD","QM","others"];
+function departments(){ const d=state.data&&state.data.departments; return (Array.isArray(d)&&d.length)?d:DEFAULT_DEPTS; }
+function userLabel(r){ return r.userName + (r.department? " ["+r.department+"]" : ""); }
 /* Telegram alert to the designated admin chat when a new reservation is submitted */
 function notifyTelegram(r){
   if(!USE_TELEGRAM || !r) return;
   const lines=[
     "🚗 New reservation / 새 차량 예약",
-    "• User: "+r.userName,
+    "• User: "+userLabel(r),
     "• Date: "+r.date+"  "+r.startTime+"–"+r.endTime,
     "• Transport: "+transportLabel(r),
     (r.destinations&&r.destinations.length? "• Trip: "+r.destinations.map(legPlain).join(", "):""),
@@ -597,7 +602,7 @@ function renderMonth(){
 
   const todays=visibleReservations(todayStr);
   const todayList = todays.length ? todays.map(r=>`<div class="row" style="justify-content:space-between;gap:8px;border-top:1px solid var(--border);padding:8px 0">
-      <div><b>${esc(transportLabel(r))}</b> · ${esc(r.userName)} <span class="hint">${r.startTime}–${r.endTime}</span>
+      <div><b>${esc(transportLabel(r))}</b> · ${esc(userLabel(r))} <span class="hint">${r.startTime}–${r.endTime}</span>
       ${canSeeDetails()&&(r.destinations.length||paxText(r))?`<div class="hint">${r.destinations.map(legHtml).join(", ")}${paxText(r)?" · 👥 "+esc(paxText(r)):""}</div>`:""}</div>
       <span class="badge ${r.status}">${esc(t("st_"+r.status))}</span></div>`).join("")
     : `<p class="hint" style="margin:8px 0 0">${esc(t("noToday"))}</p>`;
@@ -699,7 +704,7 @@ function evtInner(r){
   const details = canSeeDetails() && (r.destinations.length || paxText(r))
     ? `<div class="hint" style="margin-top:2px">${r.destinations.map(legHtml).join(" / ")}${paxText(r)?" · 👥 "+esc(paxText(r)):""}</div>` : "";
   return `<div class="row" style="justify-content:space-between;gap:6px;align-items:flex-start">
-      <b>${esc(transportLabel(r))} · ${esc(r.userName)}</b>
+      <b>${esc(transportLabel(r))} · ${esc(userLabel(r))}</b>
       <span class="badge ${r.status}">${esc(t("st_"+r.status))}</span></div>
     <div class="hint">${r.startTime}–${r.endTime}</div>${details}`;
 }
@@ -707,7 +712,7 @@ function evtInner(r){
 /* ---------------- reservation modal ---------------- */
 function openModal(dateStr,timeStr,existing){
   const draft = existing ? JSON.parse(JSON.stringify(existing)) : {
-    id:null,date:dateStr,startTime:timeStr,endTime:minToTime(Math.min(DAY_END*60,timeToMin(timeStr)+60)),userName:"",
+    id:null,date:dateStr,startTime:timeStr,endTime:minToTime(Math.min(DAY_END*60,timeToMin(timeStr)+60)),userName:"",department:"",
     transportMode:null,vehicleId:null,destinations:[{from:"",fromUrl:"",to:"",toUrl:"",detail:""}],passengers:["",""]
   };
   if(!Array.isArray(draft.destinations)||!draft.destinations.length) draft.destinations=[{from:"",fromUrl:"",to:"",toUrl:"",detail:""}];
@@ -733,7 +738,13 @@ function openModal(dateStr,timeStr,existing){
     modal.innerHTML=`
       <h3>${esc(existing?t("editResv"):t("newResv"))}</h3>
       <div class="field"><label>${esc(t("f_user"))}</label>
-        <input type="text" id="mUser" value="${esc(draft.userName)}" placeholder="${esc(t("f_user"))}"></div>
+        <div class="row">
+          <input type="text" id="mUser" value="${esc(draft.userName)}" placeholder="${esc(t("f_user"))}" style="flex:1">
+          <select id="mDept" style="flex:none;width:auto;min-width:110px">
+            <option value="">${esc(t("f_dept"))}</option>
+            ${(departments().includes(draft.department)||!draft.department?departments():[draft.department,...departments()]).map(d=>`<option value="${esc(d)}" ${d===draft.department?"selected":""}>${esc(d)}</option>`).join("")}
+          </select>
+        </div></div>
       <div class="field"><label>${esc(t("f_time"))}</label>
         <div class="row">
           <select id="mStart">${timeOptions(draft.startTime)}</select>
@@ -788,6 +799,7 @@ function openModal(dateStr,timeStr,existing){
       };
     }
     modal.querySelector("#mUser").oninput=e=>draft.userName=e.target.value;
+    modal.querySelector("#mDept").onchange=e=>draft.department=e.target.value;
     modal.querySelector("#mStart").onchange=e=>{draft.startTime=e.target.value; refreshVeh();};
     modal.querySelector("#mEnd").onchange=e=>{draft.endTime=e.target.value; refreshVeh();};
     modal.querySelectorAll("#mSeg button").forEach(b=>b.onclick=()=>{
@@ -903,7 +915,7 @@ function openModal(dateStr,timeStr,existing){
     const pax = canSeeDetails() && paxText(r)
       ? `<div class="field"><label>${esc(t("f_passengers"))}</label><div>${esc(paxText(r))}</div></div>` : "";
     modal.innerHTML=`
-      <h3>${esc(transportLabel(r))} · ${esc(r.userName)}</h3>
+      <h3>${esc(transportLabel(r))} · ${esc(userLabel(r))}</h3>
       <p class="muted" style="margin:0 0 10px">${esc(r.date)} · ${r.startTime}–${r.endTime}
         <span class="badge ${r.status}" style="margin-left:6px">${esc(t("st_"+r.status))}</span></p>
       <div class="field"><label>${esc(t("f_dest"))}</label><ul style="margin:4px 0 0;padding-left:18px">${dest}</ul></div>
@@ -920,7 +932,7 @@ function renderApprovals(){
     app.innerHTML=`<div class="notice">${esc(t("accessDenied"))}</div>`; return;
   }
   const canAct=P("apprEdit"), canEdit=P("resvEdit"), canEditPending=P("apprEdit")||P("resvEdit");
-  const info=r=>`<b>${esc(transportLabel(r))} · ${esc(r.userName)}</b>
+  const info=r=>`<b>${esc(transportLabel(r))} · ${esc(userLabel(r))}</b>
       <div class="hint">${esc(r.date)} · ${r.startTime}–${r.endTime}${r.destinations.length?" · "+esc(r.destinations.map(legPlain).join(", ")):""}${paxText(r)?" · 👥 "+esc(paxText(r)):""}</div>`;
 
   const pend=state.data.reservations.filter(r=>r.status==="pending")
@@ -1067,7 +1079,7 @@ function renderReports(){
     const dest=showDest? esc(r.destinations.map(legPlain).join(", ")+(paxText(r)?" · 👥 "+paxText(r):"")):"";
     return `<tr>
       <td>${esc(r.date)} <span class="hint">${esc(wd)}</span></td>
-      <td>${esc(r.userName)}</td>
+      <td>${esc(userLabel(r))}</td>
       <td>${esc(transportLabel(r))}</td>
       <td>${r.startTime}–${r.endTime}</td>
       <td><span class="badge ${r.status}">${esc(t("st_"+r.status))}</span></td>
@@ -1112,7 +1124,7 @@ function buildReportText(wsStr,weStr,items,totalMin,ownTrips,modeCount,vehMin,sh
   Object.keys(vehMin).forEach(id=>{const v=vehicleById(id);L.push(`  - ${v?v.name:id}: ${(vehMin[id]/60).toFixed(1)} ${t("rp_h")}`);});
   L.push("");
   items.forEach(r=>{
-    let line=`${r.date} ${r.startTime}-${r.endTime}  ${r.userName}  ${transportLabel(r)}  [${t("st_"+r.status)}]`;
+    let line=`${r.date} ${r.startTime}-${r.endTime}  ${userLabel(r)}  ${transportLabel(r)}  [${t("st_"+r.status)}]`;
     if(showDest && r.destinations.length) line+=`  ${r.destinations.map(legPlain).join(", ")}`;
     if(showDest && paxText(r)) line+=`  [${paxText(r)}]`;
     L.push(line);
@@ -1232,13 +1244,33 @@ function renderUsers(){
     <div class="tablewrap"><table class="vt">
       <thead><tr><th>${esc(t("u_id"))}</th><th>${esc(t("u_perms"))}</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
-    </table></div>`;
+    </table></div>
+    <h2 style="font-size:16px;margin:22px 0 8px">${esc(t("u_depts"))}</h2>
+    <div class="card">
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+        ${departments().map((d,i)=>`<span class="blockchip">${esc(d)}
+          <button class="ghost danger" data-deldept="${i}" style="min-width:auto;padding:0 4px">✕</button></span>`).join("")}
+      </div>
+      <div class="row" style="gap:8px">
+        <input type="text" id="ndName" placeholder="${esc(t("u_addDept"))}" style="flex:1;min-width:140px">
+        <button id="ndAdd" class="primary">${esc(t("al_add"))}</button>
+      </div>
+    </div>`;
   document.getElementById("addUser").onclick=()=>openUserEditor(null);
   app.querySelectorAll("[data-euser]").forEach(b=>b.onclick=()=>{
     const a=state.data.accounts.find(x=>x.id===b.dataset.euser); if(a) openUserEditor(a);
   });
   app.querySelectorAll("[data-duser]").forEach(b=>b.onclick=()=>{
     state.data.accounts=state.data.accounts.filter(x=>x.id!==b.dataset.duser); save(); renderUsers();
+  });
+  // departments (stored in Firestore; editable without redeploy)
+  if(!Array.isArray(state.data.departments)) state.data.departments=DEFAULT_DEPTS.slice();
+  document.getElementById("ndAdd").onclick=()=>{
+    const v=document.getElementById("ndName").value.trim();
+    if(v && !state.data.departments.includes(v)){ state.data.departments.push(v); save(); renderUsers(); }
+  };
+  app.querySelectorAll("[data-deldept]").forEach(b=>b.onclick=()=>{
+    state.data.departments.splice(+b.dataset.deldept,1); save(); renderUsers();
   });
 }
 function openUserEditor(acc){
