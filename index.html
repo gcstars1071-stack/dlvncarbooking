@@ -451,31 +451,41 @@ function paxText(r){ return (r.passengers&&r.passengers.length)? r.passengers.fi
 const DEFAULT_DEPTS=["AD","PM","PD","QM","others"];
 function departments(){ const d=state.data&&state.data.departments; return (Array.isArray(d)&&d.length)?d:DEFAULT_DEPTS; }
 function userLabel(r){ return r.userName + (r.department? " ["+r.department+"]" : ""); }
-/* Telegram alert to the designated admin chat when a new reservation is submitted */
-function notifyTelegram(r){
-  if(!USE_TELEGRAM || !r) return;
-  const lines=[
-    "🚗 New reservation / 새 차량 예약",
-    "• User: "+userLabel(r),
-    "• Date: "+r.date+"  "+r.startTime+"–"+r.endTime,
-    "• Transport: "+transportLabel(r),
-    (r.destinations&&r.destinations.length? "• Trip: "+r.destinations.map(legPlain).join(", "):""),
-    (paxText(r)? "• Passengers: "+paxText(r):""),
-    "• Status: pending — needs approval"
-  ].filter(Boolean);
-  const text=lines.join("\n");
+/* send one Telegram message to the group (config) + admin-registered recipients */
+function tgSend(text){
+  if(!USE_TELEGRAM) return;
   const ids=new Set();
   const g=String(TELEGRAM.chatId||""); // optional group id(s) hardcoded in config
   if(g && !g.startsWith("PASTE")) g.split(",").map(s=>s.trim()).filter(Boolean).forEach(x=>ids.add(x));
   (state.data.telegramRecipients||[]).forEach(r=>{ if(r&&r.id) ids.add(String(r.id).trim()); }); // admin-registered individuals
-  const recipients=[...ids];
-  recipients.forEach(id=>{
+  [...ids].forEach(id=>{
     try{
       fetch("https://api.telegram.org/bot"+TELEGRAM.botToken+"/sendMessage",{
         method:"POST", body:new URLSearchParams({chat_id:id, text, disable_web_page_preview:"true"})
-      }).catch(e=>console.warn("Telegram notify failed",id,e));
-    }catch(e){ console.warn("Telegram notify error",id,e); }
+      }).catch(e=>console.warn("Telegram send failed",id,e));
+    }catch(e){ console.warn("Telegram send error",id,e); }
   });
+}
+function resvLines(r,header){
+  return [ header,
+    "• User: "+userLabel(r),
+    "• Date: "+r.date+"  "+r.startTime+"–"+r.endTime,
+    "• Transport: "+transportLabel(r),
+    (r.destinations&&r.destinations.length? "• Trip: "+r.destinations.map(legPlain).join(", "):""),
+    (paxText(r)? "• Passengers: "+paxText(r):"")
+  ].filter(Boolean);
+}
+/* new reservation submitted → needs approval */
+function notifyTelegram(r){
+  if(!USE_TELEGRAM || !r) return;
+  const L=resvLines(r,"🚗 New reservation / 새 차량 예약"); L.push("• Status: pending — needs approval");
+  tgSend(L.join("\n"));
+}
+/* reservation confirmed → confirmed schedule alert */
+function notifyTelegramConfirmed(r){
+  if(!USE_TELEGRAM || !r) return;
+  const L=resvLines(r,"✅ Confirmed schedule / 배차 확정"); L.push("• Status: confirmed");
+  tgSend(L.join("\n"));
 }
 function vehicleAvailable(vehicleId,dateStr,startTime,endTime){
   const v=vehicleById(vehicleId); if(!v) return true;
@@ -869,7 +879,7 @@ function openModal(dateStr,timeStr,existing){
       if(draft.transportMode==="rent"){ draft.transportMode=null; draw(); } }
   }
   function onSave(){
-    let newRec=null;
+    let newRec=null, confirmedRec=null;
     const err=modal.querySelector("#mErr");
     const show=m=>{err.textContent=m;err.style.color="var(--danger)";err.hidden=false;};
     if(!draft.userName.trim()) return show(t("err_user"));
@@ -898,7 +908,9 @@ function openModal(dateStr,timeStr,existing){
       if(idx>=0){
         const prev=state.data.reservations[idx];
         if(draft.status!==prev.status) draft.decidedAt=Date.now();
-        state.data.reservations[idx]={...prev,...draft};
+        const merged={...prev,...draft};
+        state.data.reservations[idx]=merged;
+        if(draft.status==="confirmed" && prev.status!=="confirmed") confirmedRec=merged; // just confirmed via edit
       }
     }else{
       newRec={...draft,id:uid(),status:"pending",approvals:{admin:null,fleet:null},createdAt:Date.now()};
@@ -906,6 +918,7 @@ function openModal(dateStr,timeStr,existing){
     }
     save(); ov.remove(); render();
     if(!existing){ toast(t("savedPending")); notifyTelegram(newRec); }
+    if(confirmedRec) notifyTelegramConfirmed(confirmedRec);
   }
   function drawReadOnly(){
     const r=existing;
@@ -966,7 +979,7 @@ function renderApprovals(){
     // approve: a dispatch request must have a vehicle assigned first → open editor to assign
     if(r.transportMode==="own" && (!r.vehicleId || r.vehicleId==="REQUEST")){ toast(t("assignFirst")); openModal(r.date,r.startTime,r); return; }
     r.approvals[slot]=true; r.status="confirmed"; r.decidedAt=Date.now();
-    save(); renderApprovals();
+    save(); renderApprovals(); notifyTelegramConfirmed(r);
   });
   app.querySelectorAll("[data-edit]").forEach(el=>el.onclick=()=>{
     const r=state.data.reservations.find(x=>x.id===el.dataset.edit);
