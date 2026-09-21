@@ -38,7 +38,7 @@
     display:flex;align-items:center;justify-content:center;font-size:13px;}
   .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
   select,input,button,textarea{font:inherit;color:inherit;}
-  select,input[type=text],input[type=password],input[type=datetime-local]{background:var(--surface);border:1px solid var(--border);
+  select,input[type=text],input[type=password],input[type=datetime-local],input[type=time]{background:var(--surface);border:1px solid var(--border);
     border-radius:var(--radius);padding:7px 9px;min-height:34px;width:100%;max-width:100%;}
   .controls select{width:auto;}
   select:focus,input:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:0;border-color:var(--accent);}
@@ -219,6 +219,7 @@ const I18N = {
     accessDenied:"Only admin and fleet manager can view this page.",
     v_title:"Vehicle management", v_add:"Add vehicle", v_name:"Name", v_type:"Type",
     v_blocks:"Unavailable periods", v_addBlock:"Add period", v_reason:"Reason",
+    daily:"Daily", v_addDaily:"Add daily hold",
     v_from:"From", v_to:"To", v_none:"No periods", remove:"Remove",
     hiddenNote:"Destination details are hidden for your role.",
     emptyDay:"No time selected.", clickBook:"+ Click to reserve",
@@ -283,6 +284,7 @@ const I18N = {
     accessDenied:"Chỉ quản trị và quản lý xe xem được trang này.",
     v_title:"Quản lý xe", v_add:"Thêm xe", v_name:"Tên", v_type:"Loại",
     v_blocks:"Khoảng không khả dụng", v_addBlock:"Thêm khoảng", v_reason:"Lý do",
+    daily:"Hàng ngày", v_addDaily:"Thêm giữ hàng ngày",
     v_from:"Từ", v_to:"Đến", v_none:"Không có", remove:"Xóa",
     hiddenNote:"Nội dung điểm đến bị ẩn với vai trò của bạn.",
     emptyDay:"Chưa chọn giờ.", clickBook:"+ Nhấn để đặt",
@@ -489,8 +491,15 @@ function notifyTelegramConfirmed(r){
 }
 function vehicleAvailable(vehicleId,dateStr,startTime,endTime){
   const v=vehicleById(vehicleId); if(!v) return true;
-  const s=dt(dateStr,startTime), e=dt(dateStr,endTime);
-  return !v.blocks.some(b=>overlaps(s,e,new Date(b.start),new Date(b.end)));
+  const s=timeToMin(startTime), e=timeToMin(endTime);
+  return !v.blocks.some(b=>{
+    if(b.daily){ return overlapMin(s,e,timeToMin(b.startTime),timeToMin(b.endTime)); } // recurring every day
+    const bd0=b.start.slice(0,10), bd1=b.end.slice(0,10);
+    if(dateStr<bd0||dateStr>bd1) return false;
+    const bs=dateStr===bd0?timeToMin(b.start.slice(11,16)):0;
+    const be=dateStr===bd1?timeToMin(b.end.slice(11,16)):24*60;
+    return overlapMin(s,e,bs,be);
+  });
 }
 function timeToMin(tp){ return parseInt(tp.slice(0,2),10)*60 + parseInt(tp.slice(3,5),10); }
 function minToTime(m){ return pad(Math.floor(m/60))+":"+pad(m%60); }
@@ -505,6 +514,7 @@ function busyIntervals(vehicleId,dateStr,excludeId){
   });
   const v=vehicleById(vehicleId);
   if(v) v.blocks.forEach(b=>{
+    if(b.daily){ out.push([timeToMin(b.startTime),timeToMin(b.endTime)]); return; } // recurring every day
     const bd0=b.start.slice(0,10), bd1=b.end.slice(0,10);
     if(dateStr<bd0||dateStr>bd1) return;
     const s = dateStr===bd0 ? timeToMin(b.start.slice(11,16)) : 0;
@@ -994,9 +1004,13 @@ function renderVehicles(){
   }
   const canEdit=P("vehEdit");
   const rows=state.data.vehicles.map(v=>{
-    const blocks=v.blocks.length? v.blocks.map(b=>
-      `<span class="blockchip">${esc(t("reason_"+b.reason))}: ${esc(fmtBlock(b.start))}–${esc(fmtBlock(b.end))}
-        ${canEdit?`<button class="ghost danger" data-delblock="${v.id}:${b.id}" style="min-width:auto;padding:0 4px">✕</button>`:""}</span>`).join("")
+    const blocks=v.blocks.length? v.blocks.map(b=>{
+      const label = b.daily
+        ? `${esc(t("reason_"+b.reason))} · ${esc(t("daily"))}: ${esc(b.startTime)}–${esc(b.endTime)}`
+        : `${esc(t("reason_"+b.reason))}: ${esc(fmtBlock(b.start))}–${esc(fmtBlock(b.end))}`;
+      return `<span class="blockchip">${label}
+        ${canEdit?`<button class="ghost danger" data-delblock="${v.id}:${b.id}" style="min-width:auto;padding:0 4px">✕</button>`:""}</span>`;
+    }).join("")
       : `<span class="muted">${esc(t("v_none"))}</span>`;
     return `<tr>
       <td><b>${esc(v.name)}</b><div class="hint">${esc(v.type)}</div></td>
@@ -1006,6 +1020,13 @@ function renderVehicles(){
           <input type="datetime-local" data-s="${v.id}" style="width:auto">
           <input type="datetime-local" data-e="${v.id}" style="width:auto">
           <button data-addblock="${v.id}">＋ ${esc(t("v_addBlock"))}</button>
+        </div>
+        <div class="row" style="margin-top:6px;flex-wrap:wrap;gap:6px">
+          <select data-dr="${v.id}" style="width:auto"><option value="hold">${esc(t("reason_hold"))}</option><option value="repair">${esc(t("reason_repair"))}</option></select>
+          <input type="time" data-ds="${v.id}" style="width:auto">
+          <span class="muted">–</span>
+          <input type="time" data-de="${v.id}" style="width:auto">
+          <button data-adddaily="${v.id}">＋ ${esc(t("v_addDaily"))}</button>
         </div>
         <div class="err" data-berr="${v.id}" hidden></div>`:""}
       </td>
@@ -1050,6 +1071,15 @@ function renderVehicles(){
     if(!s||!e||!(new Date(e)>new Date(s))){err.textContent=t("err_block");err.hidden=false;return;}
     const v=vehicleById(vid);
     v.blocks.push({id:uid(),reason,start:s.slice(0,16),end:e.slice(0,16)}); save(); renderVehicles();
+  });
+  app.querySelectorAll("[data-adddaily]").forEach(b=>b.onclick=()=>{
+    const vid=b.dataset.adddaily;
+    const reason=app.querySelector(`select[data-dr="${vid}"]`).value;
+    const s=app.querySelector(`input[data-ds="${vid}"]`).value;
+    const e=app.querySelector(`input[data-de="${vid}"]`).value;
+    const err=app.querySelector(`[data-berr="${vid}"]`);
+    if(!s||!e||!(e>s)){err.textContent=t("err_block");err.hidden=false;return;}
+    vehicleById(vid).blocks.push({id:uid(),reason,daily:true,startTime:s,endTime:e}); save(); renderVehicles();
   });
 }
 function fmtBlock(iso){ return iso.replace("T"," "); }
