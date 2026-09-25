@@ -219,7 +219,7 @@ const I18N = {
     accessDenied:"Only admin and fleet manager can view this page.",
     v_title:"Vehicle management", v_add:"Add vehicle", v_name:"Name", v_type:"Type",
     v_blocks:"Unavailable periods", v_addBlock:"Add period", v_reason:"Reason",
-    daily:"Daily", v_addDaily:"Add daily hold",
+    daily:"Daily", v_addDaily:"Add daily hold", wd_only:"Weekdays only", wd_label:"Mon–Fri",
     v_from:"From", v_to:"To", v_none:"No periods", remove:"Remove",
     hiddenNote:"Destination details are hidden for your role.",
     emptyDay:"No time selected.", clickBook:"+ Click to reserve",
@@ -284,7 +284,7 @@ const I18N = {
     accessDenied:"Chỉ quản trị và quản lý xe xem được trang này.",
     v_title:"Quản lý xe", v_add:"Thêm xe", v_name:"Tên", v_type:"Loại",
     v_blocks:"Khoảng không khả dụng", v_addBlock:"Thêm khoảng", v_reason:"Lý do",
-    daily:"Hàng ngày", v_addDaily:"Thêm giữ hàng ngày",
+    daily:"Hàng ngày", v_addDaily:"Thêm giữ hàng ngày", wd_only:"Chỉ ngày thường", wd_label:"T2–T6",
     v_from:"Từ", v_to:"Đến", v_none:"Không có", remove:"Xóa",
     hiddenNote:"Nội dung điểm đến bị ẩn với vai trò của bạn.",
     emptyDay:"Chưa chọn giờ.", clickBook:"+ Nhấn để đặt",
@@ -453,20 +453,26 @@ function paxText(r){ return (r.passengers&&r.passengers.length)? r.passengers.fi
 const DEFAULT_DEPTS=["AD","PM","PD","QM","others"];
 function departments(){ const d=state.data&&state.data.departments; return (Array.isArray(d)&&d.length)?d:DEFAULT_DEPTS; }
 function userLabel(r){ return r.userName + (r.department? " ["+r.department+"]" : ""); }
-/* send one Telegram message to the group (config) + admin-registered recipients */
-function tgSend(text){
-  if(!USE_TELEGRAM) return;
+function resvNo(r){ return r.no? "No."+r.no+" " : ""; }
+function tgRecipients(){
   const ids=new Set();
   const g=String(TELEGRAM.chatId||""); // optional group id(s) hardcoded in config
   if(g && !g.startsWith("PASTE")) g.split(",").map(s=>s.trim()).filter(Boolean).forEach(x=>ids.add(x));
   (state.data.telegramRecipients||[]).forEach(r=>{ if(r&&r.id) ids.add(String(r.id).trim()); }); // admin-registered individuals
-  [...ids].forEach(id=>{
+  return [...ids];
+}
+/* send text to group + recipients; returns {chatId: message_id}. opts.replyTo = {chatId: message_id} to thread as a reply */
+async function tgSend(text,opts){
+  const out={}; if(!USE_TELEGRAM) return out;
+  await Promise.all(tgRecipients().map(async id=>{
     try{
-      fetch("https://api.telegram.org/bot"+TELEGRAM.botToken+"/sendMessage",{
-        method:"POST", body:new URLSearchParams({chat_id:id, text, disable_web_page_preview:"true"})
-      }).catch(e=>console.warn("Telegram send failed",id,e));
-    }catch(e){ console.warn("Telegram send error",id,e); }
-  });
+      const body=new URLSearchParams({chat_id:id, text, disable_web_page_preview:"true"});
+      if(opts&&opts.replyTo&&opts.replyTo[id]){ body.set("reply_to_message_id",String(opts.replyTo[id])); body.set("allow_sending_without_reply","true"); }
+      const r=await fetch("https://api.telegram.org/bot"+TELEGRAM.botToken+"/sendMessage",{method:"POST",body});
+      const j=await r.json(); if(j&&j.ok&&j.result) out[id]=j.result.message_id;
+    }catch(e){ console.warn("Telegram send",id,e); }
+  }));
+  return out;
 }
 function resvLines(r,header){
   return [ header,
@@ -477,23 +483,27 @@ function resvLines(r,header){
     (paxText(r)? "• Passengers: "+paxText(r):"")
   ].filter(Boolean);
 }
-/* new reservation submitted → needs approval */
-function notifyTelegram(r){
+/* new reservation submitted → needs approval (store per-chat message ids for later reply) */
+async function notifyTelegram(r){
   if(!USE_TELEGRAM || !r) return;
-  const L=resvLines(r,"🚗 New reservation / 새 차량 예약"); L.push("• Status: pending — needs approval");
-  tgSend(L.join("\n"));
+  const L=resvLines(r,"🚗 New reservation / 새 차량 예약  (No. "+(r.no||"?")+")"); L.push("• Status: pending — needs approval");
+  const ids=await tgSend(L.join("\n"));
+  const rec=state.data.reservations.find(x=>x.id===r.id); if(rec){ rec.tgMsgIds=ids; save(); }
 }
-/* reservation confirmed → confirmed schedule alert */
-function notifyTelegramConfirmed(r){
+/* reservation confirmed → confirmed alert, replied onto the original request message */
+async function notifyTelegramConfirmed(r){
   if(!USE_TELEGRAM || !r) return;
-  const L=resvLines(r,"✅ Confirmed schedule / 배차 확정"); L.push("• Status: confirmed");
-  tgSend(L.join("\n"));
+  const L=resvLines(r,"✅ Confirmed schedule / 배차 확정  (No. "+(r.no||"?")+")"); L.push("• Status: confirmed");
+  await tgSend(L.join("\n"), {replyTo: r.tgMsgIds||{}});
 }
 function vehicleAvailable(vehicleId,dateStr,startTime,endTime){
   const v=vehicleById(vehicleId); if(!v) return true;
   const s=timeToMin(startTime), e=timeToMin(endTime);
   return !v.blocks.some(b=>{
-    if(b.daily){ return overlapMin(s,e,timeToMin(b.startTime),timeToMin(b.endTime)); } // recurring every day
+    if(b.daily){
+      if(b.weekdaysOnly){ const wd=new Date(dateStr+"T00:00").getDay(); if(wd===0||wd===6) return false; } // skip Sat/Sun
+      return overlapMin(s,e,timeToMin(b.startTime),timeToMin(b.endTime)); // recurring
+    }
     const bd0=b.start.slice(0,10), bd1=b.end.slice(0,10);
     if(dateStr<bd0||dateStr>bd1) return false;
     const bs=dateStr===bd0?timeToMin(b.start.slice(11,16)):0;
@@ -514,7 +524,7 @@ function busyIntervals(vehicleId,dateStr,excludeId){
   });
   const v=vehicleById(vehicleId);
   if(v) v.blocks.forEach(b=>{
-    if(b.daily){ out.push([timeToMin(b.startTime),timeToMin(b.endTime)]); return; } // recurring every day
+    if(b.daily){ if(b.weekdaysOnly){ const wd=new Date(dateStr+"T00:00").getDay(); if(wd===0||wd===6) return; } out.push([timeToMin(b.startTime),timeToMin(b.endTime)]); return; } // recurring
     const bd0=b.start.slice(0,10), bd1=b.end.slice(0,10);
     if(dateStr<bd0||dateStr>bd1) return;
     const s = dateStr===bd0 ? timeToMin(b.start.slice(11,16)) : 0;
@@ -724,7 +734,7 @@ function evtInner(r){
   const details = canSeeDetails() && (r.destinations.length || paxText(r))
     ? `<div class="hint" style="margin-top:2px">${r.destinations.map(legHtml).join(" / ")}${paxText(r)?" · 👥 "+esc(paxText(r)):""}</div>` : "";
   return `<div class="row" style="justify-content:space-between;gap:6px;align-items:flex-start">
-      <b>${esc(transportLabel(r))} · ${esc(userLabel(r))}</b>
+      <b>${esc(resvNo(r))}${esc(transportLabel(r))} · ${esc(userLabel(r))}</b>
       <span class="badge ${r.status}">${esc(t("st_"+r.status))}</span></div>
     <div class="hint">${r.startTime}–${r.endTime}</div>${details}`;
 }
@@ -923,7 +933,8 @@ function openModal(dateStr,timeStr,existing){
         if(draft.status==="confirmed" && prev.status!=="confirmed") confirmedRec=merged; // just confirmed via edit
       }
     }else{
-      newRec={...draft,id:uid(),status:"pending",approvals:{admin:null,fleet:null},createdAt:Date.now()};
+      const nextNo=state.data.reservations.reduce((m,x)=>Math.max(m,x.no||0),0)+1;
+      newRec={...draft,id:uid(),no:nextNo,status:"pending",approvals:{admin:null,fleet:null},createdAt:Date.now()};
       state.data.reservations.push(newRec);
     }
     save(); ov.remove(); render();
@@ -955,7 +966,7 @@ function renderApprovals(){
     app.innerHTML=`<div class="notice">${esc(t("accessDenied"))}</div>`; return;
   }
   const canAct=P("apprEdit"), canEdit=P("resvEdit"), canEditPending=P("apprEdit")||P("resvEdit");
-  const info=r=>`<b>${esc(transportLabel(r))} · ${esc(userLabel(r))}</b>
+  const info=r=>`<b>${esc(resvNo(r))}${esc(transportLabel(r))} · ${esc(userLabel(r))}</b>
       <div class="hint">${esc(r.date)} · ${r.startTime}–${r.endTime}${r.destinations.length?" · "+esc(r.destinations.map(legPlain).join(", ")):""}${paxText(r)?" · 👥 "+esc(paxText(r)):""}</div>`;
 
   const pend=state.data.reservations.filter(r=>r.status==="pending")
@@ -1006,7 +1017,7 @@ function renderVehicles(){
   const rows=state.data.vehicles.map(v=>{
     const blocks=v.blocks.length? v.blocks.map(b=>{
       const label = b.daily
-        ? `${esc(t("reason_"+b.reason))} · ${esc(t("daily"))}: ${esc(b.startTime)}–${esc(b.endTime)}`
+        ? `${esc(t("reason_"+b.reason))} · ${esc(b.weekdaysOnly?t("wd_label"):t("daily"))}: ${esc(b.startTime)}–${esc(b.endTime)}`
         : `${esc(t("reason_"+b.reason))}: ${esc(fmtBlock(b.start))}–${esc(fmtBlock(b.end))}`;
       return `<span class="blockchip">${label}
         ${canEdit?`<button class="ghost danger" data-delblock="${v.id}:${b.id}" style="min-width:auto;padding:0 4px">✕</button>`:""}</span>`;
@@ -1026,6 +1037,7 @@ function renderVehicles(){
           <input type="time" data-ds="${v.id}" style="width:auto">
           <span class="muted">–</span>
           <input type="time" data-de="${v.id}" style="width:auto">
+          <label class="hint" style="display:inline-flex;gap:4px;align-items:center"><input type="checkbox" data-dwd="${v.id}"> ${esc(t("wd_only"))}</label>
           <button data-adddaily="${v.id}">＋ ${esc(t("v_addDaily"))}</button>
         </div>
         <div class="err" data-berr="${v.id}" hidden></div>`:""}
@@ -1077,9 +1089,10 @@ function renderVehicles(){
     const reason=app.querySelector(`select[data-dr="${vid}"]`).value;
     const s=app.querySelector(`input[data-ds="${vid}"]`).value;
     const e=app.querySelector(`input[data-de="${vid}"]`).value;
+    const wd=app.querySelector(`input[data-dwd="${vid}"]`).checked;
     const err=app.querySelector(`[data-berr="${vid}"]`);
     if(!s||!e||!(e>s)){err.textContent=t("err_block");err.hidden=false;return;}
-    vehicleById(vid).blocks.push({id:uid(),reason,daily:true,startTime:s,endTime:e}); save(); renderVehicles();
+    vehicleById(vid).blocks.push({id:uid(),reason,daily:true,weekdaysOnly:wd,startTime:s,endTime:e}); save(); renderVehicles();
   });
 }
 function fmtBlock(iso){ return iso.replace("T"," "); }
