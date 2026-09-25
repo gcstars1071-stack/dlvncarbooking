@@ -360,9 +360,11 @@ function save(){
   try{ localStorage.setItem(LS_KEY,JSON.stringify(state.data)); }catch(e){}
 }
 // restore login session from the loaded accounts, then draw
+let hashHandled=false;
 function afterLoad(){
   const sess=localStorage.getItem("veh_session");
   state.user = (sess && state.data.accounts) ? (state.data.accounts.find(a=>a.id===sess)||null) : null;
+  if(!hashHandled){ hashHandled=true; const mh=(location.hash||"").match(/d=(\d{4}-\d{2}-\d{2})/); if(mh){ state.selDate=mh[1]; state.view="day"; } } // deep-link from Telegram link
   render();
 }
 // shared mode: keep one Firestore document (app/data) in sync with state.data
@@ -453,7 +455,15 @@ function paxText(r){ return (r.passengers&&r.passengers.length)? r.passengers.fi
 const DEFAULT_DEPTS=["AD","PM","PD","QM","others"];
 function departments(){ const d=state.data&&state.data.departments; return (Array.isArray(d)&&d.length)?d:DEFAULT_DEPTS; }
 function userLabel(r){ return r.userName + (r.department? " ["+r.department+"]" : ""); }
-function resvNo(r){ return r.no? "No."+r.no+" " : ""; }
+function resvNo(r){ return r.no? "["+r.no+"] " : ""; }
+// reservation code: DDMMYYYY-## based on the reservation date + that day's next sequence
+function makeResvNo(dateStr){
+  const [Y,M,D]=dateStr.split("-"); const base=D+M+Y;
+  const seqs=(state.data.reservations||[]).filter(x=>typeof x.no==="string" && x.no.indexOf(base+"-")===0)
+    .map(x=>parseInt(x.no.split("-")[1],10)||0);
+  const n=(seqs.length?Math.max.apply(null,seqs):0)+1;
+  return base+"-"+String(n).padStart(2,"0");
+}
 function tgRecipients(){
   const ids=new Set();
   const g=String(TELEGRAM.chatId||""); // optional group id(s) hardcoded in config
@@ -486,14 +496,15 @@ function resvLines(r,header){
 /* new reservation submitted → needs approval (store per-chat message ids for later reply) */
 async function notifyTelegram(r){
   if(!USE_TELEGRAM || !r) return;
-  const L=resvLines(r,"🚗 New reservation / 새 차량 예약  (No. "+(r.no||"?")+")"); L.push("• Status: pending — needs approval");
+  const L=resvLines(r,"🚗 New reservation / 새 차량 예약  ["+(r.no||"?")+"]"); L.push("• Status: pending — needs approval");
   const ids=await tgSend(L.join("\n"));
   const rec=state.data.reservations.find(x=>x.id===r.id); if(rec){ rec.tgMsgIds=ids; save(); }
 }
 /* reservation confirmed → confirmed alert, replied onto the original request message */
 async function notifyTelegramConfirmed(r){
   if(!USE_TELEGRAM || !r) return;
-  const L=resvLines(r,"✅ Confirmed schedule / 배차 확정  (No. "+(r.no||"?")+")"); L.push("• Status: confirmed");
+  const L=resvLines(r,"✅ Confirmed schedule / 배차 확정  ["+(r.no||"?")+"]"); L.push("• Status: confirmed");
+  L.push("• Open: "+location.origin+location.pathname+"#d="+r.date);
   await tgSend(L.join("\n"), {replyTo: r.tgMsgIds||{}});
 }
 function vehicleAvailable(vehicleId,dateStr,startTime,endTime){
@@ -933,8 +944,7 @@ function openModal(dateStr,timeStr,existing){
         if(draft.status==="confirmed" && prev.status!=="confirmed") confirmedRec=merged; // just confirmed via edit
       }
     }else{
-      const nextNo=state.data.reservations.reduce((m,x)=>Math.max(m,x.no||0),0)+1;
-      newRec={...draft,id:uid(),no:nextNo,status:"pending",approvals:{admin:null,fleet:null},createdAt:Date.now()};
+      newRec={...draft,id:uid(),no:makeResvNo(draft.date),status:"pending",approvals:{admin:null,fleet:null},createdAt:Date.now()};
       state.data.reservations.push(newRec);
     }
     save(); ov.remove(); render();
