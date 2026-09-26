@@ -1,0 +1,18 @@
+{
+  "name": "dlvn-car-booking",
+  "version": "1.0.0",
+  "description": "DLHI VINA vehicle reservation — static app + SSO/telegram backend",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "express": "^4.21.2",
+    "jose": "^5.9.6"
+  }
+}
