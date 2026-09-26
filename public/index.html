@@ -382,9 +382,15 @@ async function bootstrapSso(){
   if(!state.data.accounts) state.data.accounts=[];
   let acc=state.data.accounts.find(a=>a.ssoSubject===me.ssoSubject);
   if(!acc){
-    acc={ id:"fg_"+me.sub, name:me.name||me.username||me.sub, department:"", isAdmin:false, ssoSubject:me.ssoSubject,
-      perms:{seeDetails:false,calCreate:true,resvEdit:false,apprView:false,apprEdit:false,vehView:false,vehEdit:false,repView:false} };
+    // new SSO account: admin from the start if Task says so, else minimal perms
+    acc={ id:"fg_"+me.sub, name:me.name||me.username||me.sub, department:"", ssoSubject:me.ssoSubject,
+      isAdmin:me.isAdmin===true,
+      perms: me.isAdmin===true ? fullPerms()
+        : {seeDetails:false,calCreate:true,resvEdit:false,apprView:false,apprEdit:false,vehView:false,vehEdit:false,repView:false} };
     state.data.accounts.push(acc); save();
+  }else if(me.isAdmin===true && !acc.isAdmin){
+    // auto-promote only — never auto-demote (manual admin grants are preserved)
+    acc.isAdmin=true; acc.perms=fullPerms(); save();
   }
   state.user=acc; localStorage.setItem("veh_session",acc.id);
   return true;

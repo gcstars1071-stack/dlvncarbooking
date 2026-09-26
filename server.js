@@ -68,6 +68,7 @@ async function makeSessionCookie(identity) {
   const token = await new SignJWT({
     name: identity.name || '',
     username: identity.username || '',
+    adm: identity.isAdmin === true,   // Task-conveyed admin (auto-promote only)
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(identity.sub)
@@ -115,6 +116,7 @@ app.get('/api/sso/consume', async (req, res) => {
       sub: String(sub),
       name: typeof payload.name === 'string' ? payload.name : '',
       username: typeof payload.preferred_username === 'string' ? payload.preferred_username : '',
+      isAdmin: payload.is_admin === true,   // absent/false → undefined-safe (no change downstream)
     };
     const token = await makeSessionCookie(identity);
     setSession(res, token);
@@ -136,6 +138,7 @@ app.get('/api/me', async (req, res) => {
         sub: payload.sub,
         name: payload.name || '',
         username: payload.username || '',
+        isAdmin: payload.adm === true,
       },
     });
   } catch {
