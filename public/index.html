@@ -777,7 +777,8 @@ function evtInner(r){
 /* ---------------- reservation modal ---------------- */
 function openModal(dateStr,timeStr,existing){
   const draft = existing ? JSON.parse(JSON.stringify(existing)) : {
-    id:null,date:dateStr,startTime:timeStr,endTime:minToTime(Math.min(DAY_END*60,timeToMin(timeStr)+60)),userName:"",department:"",
+    id:null,date:dateStr,startTime:timeStr,endTime:minToTime(Math.min(DAY_END*60,timeToMin(timeStr)+60)),
+    userName:(state.user&&state.user.name)||"", department:(state.user&&state.user.department)||"",  // prefill from the logged-in (e.g. SSO) user
     transportMode:null,vehicleId:null,destinations:[{from:"",fromUrl:"",to:"",toUrl:"",detail:""}],passengers:["",""]
   };
   if(!Array.isArray(draft.destinations)||!draft.destinations.length) draft.destinations=[{from:"",fromUrl:"",to:"",toUrl:"",detail:""}];
