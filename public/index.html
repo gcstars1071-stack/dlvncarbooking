@@ -1288,8 +1288,7 @@ function openLogin(){
     <div class="field"><label>${esc(t("u_id"))}</label><input type="text" id="lgId" autocomplete="username"></div>
     <div class="field"><label>${esc(t("u_pw"))}</label><input type="password" id="lgPw" autocomplete="current-password"></div>
     <div class="err" id="lgErr" hidden></div>
-    <div class="actions"><button id="lgCancel">${esc(t("cancel"))}</button><button id="lgGo" class="primary">${esc(t("login"))}</button></div>
-    <p class="hint" style="margin-top:12px">${esc(t("demoAccounts"))}</p>`;
+    <div class="actions"><button id="lgCancel">${esc(t("cancel"))}</button><button id="lgGo" class="primary">${esc(t("login"))}</button></div>`;
   const go=()=>{
     const id=m.querySelector("#lgId").value.trim(), pw=m.querySelector("#lgPw").value;
     const acc=state.data.accounts.find(a=>a.id===id && a.password===hashPw(pw));
