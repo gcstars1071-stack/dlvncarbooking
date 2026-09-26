@@ -65,11 +65,10 @@ function publicOrigin(req) {
 }
 
 async function makeSessionCookie(identity) {
-  const token = await new SignJWT({
-    name: identity.name || '',
-    username: identity.username || '',
-    adm: identity.isAdmin === true,   // Task-conveyed admin (auto-promote only)
-  })
+  const claims = { name: identity.name || '', username: identity.username || '' };
+  // only carry adm when Task sent an explicit boolean — absent stays absent
+  if (typeof identity.isAdmin === 'boolean') claims.adm = identity.isAdmin;
+  const token = await new SignJWT(claims)
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(identity.sub)
     .setIssuedAt()
@@ -116,7 +115,8 @@ app.get('/api/sso/consume', async (req, res) => {
       sub: String(sub),
       name: typeof payload.name === 'string' ? payload.name : '',
       username: typeof payload.preferred_username === 'string' ? payload.preferred_username : '',
-      isAdmin: payload.is_admin === true,   // absent/false → undefined-safe (no change downstream)
+      // true / false / undefined — undefined means "no change downstream"
+      isAdmin: typeof payload.is_admin === 'boolean' ? payload.is_admin : undefined,
     };
     const token = await makeSessionCookie(identity);
     setSession(res, token);
@@ -138,7 +138,8 @@ app.get('/api/me', async (req, res) => {
         sub: payload.sub,
         name: payload.name || '',
         username: payload.username || '',
-        isAdmin: payload.adm === true,
+        // true / false / omitted (omitted when Task didn't send the claim)
+        isAdmin: typeof payload.adm === 'boolean' ? payload.adm : undefined,
       },
     });
   } catch {

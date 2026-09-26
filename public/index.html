@@ -381,17 +381,18 @@ async function bootstrapSso(){
   if(!me || !me.ssoSubject) return false;
   if(!state.data.accounts) state.data.accounts=[];
   let acc=state.data.accounts.find(a=>a.ssoSubject===me.ssoSubject);
+  // Task conveys admin as an explicit boolean; undefined => leave as-is.
+  const wantAdmin = (me.isAdmin===true) ? true : (me.isAdmin===false ? false : undefined);
   if(!acc){
-    // new SSO account: admin from the start if Task says so, else minimal perms
+    const admin = wantAdmin===true;
     acc={ id:"fg_"+me.sub, name:me.name||me.username||me.sub, department:"", ssoSubject:me.ssoSubject,
-      isAdmin:me.isAdmin===true,
-      perms: me.isAdmin===true ? fullPerms()
-        : {seeDetails:false,calCreate:true,resvEdit:false,apprView:false,apprEdit:false,vehView:false,vehEdit:false,repView:false} };
+      isAdmin:admin, perms: admin ? fullPerms() : minPerms() };
     state.data.accounts.push(acc); save();
-  }else if(me.isAdmin===true && !acc.isAdmin){
-    // auto-promote only — never auto-demote (manual admin grants are preserved)
-    acc.isAdmin=true; acc.perms=fullPerms(); save();
-  }
+  }else if(wantAdmin===true && !acc.isAdmin){
+    acc.isAdmin=true; acc.perms=fullPerms(); save();          // promote
+  }else if(wantAdmin===false && acc.isAdmin){
+    acc.isAdmin=false; acc.perms=minPerms(); save();          // demote (bidirectional sync)
+  } // wantAdmin===undefined => no change (missing/invalid claim)
   state.user=acc; localStorage.setItem("veh_session",acc.id);
   return true;
 }
@@ -445,6 +446,7 @@ function seed(){
 /* ---------------- domain logic ---------------- */
 const GUEST_PERMS={seeDetails:false,calCreate:true,resvEdit:false,apprView:false,apprEdit:false,vehView:false,vehEdit:false,repView:false};
 function fullPerms(){return {seeDetails:true,calCreate:true,resvEdit:true,apprView:true,apprEdit:true,vehView:true,vehEdit:true,repView:true};}
+function minPerms(){return Object.assign({},GUEST_PERMS);} // minimal perms for a general/demoted SSO account
 function perms(){ if(!state.user) return GUEST_PERMS; if(state.user.isAdmin) return fullPerms(); return Object.assign({},GUEST_PERMS,state.user.perms||{}); }
 function P(k){ return !!perms()[k]; }
 function isAdmin(){ return !!(state.user && state.user.isAdmin); }
