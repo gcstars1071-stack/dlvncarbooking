@@ -239,6 +239,7 @@ const I18N = {
     rp_date:"Date", rp_user:"User", rp_transport:"Transport", rp_time:"Time", rp_status:"Status", rp_dest:"Destinations",
     rp_auto:"Generated automatically from reservation records.",
     login:"Login", logout:"Logout", loginTitle:"Log in", loginFail:"Wrong ID or password.", sso_failed:"Single sign-on failed. Please log in.",
+    data_stale:"Data was updated elsewhere — reloaded the latest. Please redo your change.", save_failed:"Save failed. Please try again.",
     demoAccounts:"Demo: admin/admin, fleet/fleet, driver/driver",
     todaySchedule:"Today's schedule", noToday:"No schedule for today.",
     nav_users:"Users", u_title:"User management", u_add:"Add user", u_edit:"Edit",
@@ -304,6 +305,7 @@ const I18N = {
     rp_date:"Ngày", rp_user:"Người dùng", rp_transport:"Phương tiện", rp_time:"Giờ", rp_status:"Trạng thái", rp_dest:"Điểm đến",
     rp_auto:"Tự động tạo từ dữ liệu đặt xe.",
     login:"Đăng nhập", logout:"Đăng xuất", loginTitle:"Đăng nhập", loginFail:"Sai ID hoặc mật khẩu.", sso_failed:"Đăng nhập một lần (SSO) thất bại. Vui lòng đăng nhập.",
+    data_stale:"Dữ liệu vừa được cập nhật ở nơi khác — đã tải lại bản mới nhất. Vui lòng thao tác lại.", save_failed:"Lưu thất bại. Vui lòng thử lại.",
     demoAccounts:"Demo: admin/admin, fleet/fleet, driver/driver",
     todaySchedule:"Lịch hôm nay", noToday:"Không có lịch hôm nay.",
     nav_users:"Người dùng", u_title:"Quản lý người dùng", u_add:"Thêm người dùng", u_edit:"Sửa",
@@ -352,16 +354,36 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","
 function hashPw(s){ let h=5381; s=String(s); for(let i=0;i<s.length;i++){ h=(((h<<5)+h)^s.charCodeAt(i))>>>0; } return "h"+h.toString(16); }
 
 /* ---------------- persistence + seed ---------------- */
-function load(){
+const USE_SERVER = true;   // data now lives on the Railway server (GET/PUT /api/data), not Firestore
+let DATA_VERSION = 0;      // optimistic-concurrency token from the server
+async function load(){
+  if(USE_SERVER){
+    const r=await fetch("/api/data"); if(!r.ok) throw new Error("load "+r.status);
+    const j=await r.json(); state.data=j.data; DATA_VERSION=j.version||0; return;
+  }
   try{ const raw=localStorage.getItem(LS_KEY); if(raw){ state.data=JSON.parse(raw); return; } }catch(e){}
-  state.data=seed();
-  save();
+  state.data=seed(); save();
 }
-function save(){
+async function save(){
   // guard: never persist an uninitialised/empty dataset (would clobber real data)
   if(!state.data || !Array.isArray(state.data.accounts) || !state.data.accounts.length){ console.warn("save skipped: data not loaded"); return; }
-  if(USE_FIREBASE && fbDoc){ fbDoc.set(state.data).catch(e=>console.error("save failed",e)); return; }
+  if(USE_SERVER){
+    try{
+      const r=await fetch("/api/data",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({baseVersion:DATA_VERSION,data:state.data})});
+      if(r.status===409){ const j=await r.json(); DATA_VERSION=j.version; state.data=j.data; render(); toast(t("data_stale")); return; }
+      if(r.ok){ DATA_VERSION=(await r.json()).version; } else { console.error("save failed",r.status); toast(t("save_failed")); }
+    }catch(e){ console.error("save failed",e); toast(t("save_failed")); }
+    return;
+  }
   try{ localStorage.setItem(LS_KEY,JSON.stringify(state.data)); }catch(e){}
+}
+// live-ish updates: pick up other people's changes (skip while a modal is open)
+function startPolling(){
+  setInterval(async()=>{
+    if(document.querySelector(".overlay")) return;
+    try{ const r=await fetch("/api/data"); if(!r.ok) return; const j=await r.json();
+      if((j.version||0)!==DATA_VERSION){ DATA_VERSION=j.version||0; state.data=j.data; render(); } }catch(e){}
+  }, 12000);
 }
 // restore login session from the loaded accounts, then draw
 let hashHandled=false, ssoChecked=false;
@@ -1447,10 +1469,11 @@ document.getElementById("langSel").onchange=e=>{
 };
 
 /* ---------------- boot ---------------- */
-if(USE_FIREBASE){
-  initFirebase();               // shared mode: data loads via onSnapshot, then afterLoad() renders
+if(USE_SERVER){
+  load().then(()=>{ afterLoad(); startPolling(); })
+        .catch(e=>{ console.error(e); alert("Data load failed: "+e.message); });
 }else{
-  load(); afterLoad();          // local mode: this browser only
+  load(); afterLoad();          // local (localStorage) mode
 }
 </script>
 </body>
