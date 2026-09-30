@@ -17,6 +17,7 @@ import cookieParser from 'cookie-parser';
 import { createRemoteJWKSet, jwtVerify, SignJWT } from 'jose';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import fs from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -47,6 +48,40 @@ const PROD = process.env.NODE_ENV === 'production';
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TG_GROUP = process.env.TELEGRAM_CHAT_ID || '';   // group id(s), comma separated
 const TG_ENABLED = !!TG_TOKEN;
+
+// ── data store (server-owned JSON on a persistent volume) ──────────────────
+// Replaces the old client-writes-Firestore model. The whole app dataset lives
+// in one JSON file; every write first snapshots the previous file into backups/
+// so no bad/stale write can lose data. Point DATA_DIR at a Railway Volume
+// (e.g. /data) so it survives redeploys.
+const DATA_DIR = process.env.DATA_DIR || join(__dirname, 'data');
+const DATA_FILE = join(DATA_DIR, 'app.json');
+const BACKUP_DIR = join(DATA_DIR, 'backups');
+const MAX_BACKUPS = 300;
+
+function hashPw(s){ let h=5381; s=String(s); for(let i=0;i<s.length;i++){ h=(((h<<5)+h)^s.charCodeAt(i))>>>0; } return 'h'+h.toString(16); }
+function initialData(){
+  return { vehicles:[], reservations:[],
+    accounts:[{ id:'admin', password:hashPw('admin'), name:'Administrator', isAdmin:true, perms:{} }],
+    departments:['AD','PM','PD','QM','others'], telegramRecipients:[] };
+}
+function ensureDirs(){ fs.mkdirSync(BACKUP_DIR, { recursive:true }); }
+function readStore(){
+  try { const s = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); if (s && s.data) return { version: s.version||1, data: s.data }; } catch {}
+  const init = { version:1, data: initialData() };
+  try { ensureDirs(); fs.writeFileSync(DATA_FILE, JSON.stringify(init)); } catch(e){ console.warn('[store] init failed', e.message); }
+  return init;
+}
+function pruneBackups(){ try { const f = fs.readdirSync(BACKUP_DIR).filter(n=>n.startsWith('app-')).sort(); while (f.length > MAX_BACKUPS) fs.unlinkSync(join(BACKUP_DIR, f.shift())); } catch {} }
+function writeStore(data){
+  ensureDirs();
+  const cur = readStore();
+  try { fs.writeFileSync(join(BACKUP_DIR, `app-${new Date().toISOString().replace(/[:.]/g,'-')}.json`), JSON.stringify(cur)); pruneBackups(); }
+  catch(e){ console.warn('[store] backup failed', e.message); }
+  const next = { version: cur.version + 1, data };
+  fs.writeFileSync(DATA_FILE, JSON.stringify(next));
+  return next.version;
+}
 
 // ── jti replay guard (single instance, 60s tickets → in-memory is enough) ──
 const usedJti = new Set();
@@ -202,7 +237,31 @@ app.get('/api/tg-updates', async (req, res) => {
   }
 });
 
-app.get('/healthz', (req, res) => res.json({ ok: true, sso: SSO_ENABLED, telegram: TG_ENABLED }));
+// ── app data: read / write the whole dataset ───────────────────────────────
+app.get('/api/data', (req, res) => {
+  const s = readStore();
+  res.json({ version: s.version, data: s.data });
+});
+app.put('/api/data', (req, res) => {
+  const { data, baseVersion } = req.body || {};
+  // guard: never persist an empty/uninitialised dataset (would wipe real data)
+  if (!data || !Array.isArray(data.accounts) || !data.accounts.length) {
+    return res.status(400).json({ error: 'invalid data (no accounts)' });
+  }
+  const cur = readStore();
+  // optimistic concurrency: reject a write built on a stale version
+  if (typeof baseVersion === 'number' && baseVersion !== cur.version) {
+    return res.status(409).json({ error: 'stale', version: cur.version, data: cur.data });
+  }
+  const version = writeStore(data);
+  res.json({ ok: true, version });
+});
+
+app.get('/healthz', (req, res) => {
+  let reservations = null, storeVersion = null;
+  try { const s = readStore(); reservations = (s.data.reservations||[]).length; storeVersion = s.version; } catch {}
+  res.json({ ok: true, sso: SSO_ENABLED, telegram: TG_ENABLED, store: true, reservations, storeVersion, dataDir: DATA_DIR });
+});
 
 // ── static app ────────────────────────────────────────────────────────────
 app.use(express.static(join(__dirname, 'public'), { extensions: ['html'] }));
