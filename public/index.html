@@ -472,13 +472,15 @@ function transportLabel(r){
 /* ---- trip leg rendering (From/To/Detail, backward-compatible with old {place,note}) ---- */
 function isUrl(s){ return typeof s==="string" && /^https?:\/\//i.test(s.trim()); }
 function placeHtml(name,url){ const n=esc(name||""); return isUrl(url)?`<a href="${esc(url.trim())}" target="_blank" rel="noopener">${n||esc(url.trim())}</a>`:n; }
+function legStops(d){ return (Array.isArray(d.extraTos)?d.extraTos:[]).filter(x=>x&&(x.to||"").trim()); } // extra destinations within a leg (incl. round-trip return)
 function legPlain(d){
-  if(d.to||d.from){ const f=d.from||"", to=d.to||""; let s=(f&&to)?f+" → "+to:(to||f); if(d.detail) s+=" ("+d.detail+")"; return s; }
+  if(d.to||d.from||legStops(d).length){ const parts=[]; if(d.from)parts.push(d.from); if(d.to)parts.push(d.to); legStops(d).forEach(x=>parts.push(x.to));
+    let s=parts.join(" → "); if(d.detail) s+=" ("+d.detail+")"; return s; }
   return (d.place||"")+(d.note?" ("+d.note+")":""); // old records
 }
 function legHtml(d){
-  if(d.to||d.from){ const f=placeHtml(d.from,d.fromUrl), to=placeHtml(d.to,d.toUrl);
-    let s=(d.from&&d.to)?f+" → "+to:(d.to?to:f); if(d.detail) s+=" <span class='muted'>("+esc(d.detail)+")</span>"; return s; }
+  if(d.to||d.from||legStops(d).length){ const parts=[]; if(d.from)parts.push(placeHtml(d.from,d.fromUrl)); if(d.to)parts.push(placeHtml(d.to,d.toUrl)); legStops(d).forEach(x=>parts.push(placeHtml(x.to,x.toUrl)));
+    let s=parts.join(" → "); if(d.detail) s+=" <span class='muted'>("+esc(d.detail)+")</span>"; return s; }
   return esc(d.place||"")+(d.note?" <span class='muted'>("+esc(d.note)+")</span>":""); // old records
 }
 function paxText(r){ return (r.passengers&&r.passengers.length)? r.passengers.filter(Boolean).join(", "):""; }
@@ -795,7 +797,7 @@ function openModal(dateStr,timeStr,existing){
     let o=""; for(let m=DAY_START*60;m<=DAY_END*60;m+=15){const v=minToTime(m); o+=`<option value="${v}" ${v===sel?"selected":""}>${v}</option>`;}
     return o;
   }
-  function destCount(){ return draft.destinations.filter(d=>!d.roundTrip && (d.to||d.place||"").trim()).length; } // round-trip return legs don't count toward the Rent-car unlock
+  function destCount(){ return draft.destinations.filter(d=>(d.to||d.place||"").trim()).length; } // legs (cards) with a destination; round-trip return stops live inside a leg and don't count
 
   function draw(){
     if(existing && !canEdit){ drawReadOnly(); return; }
@@ -905,21 +907,30 @@ function openModal(dateStr,timeStr,existing){
           <input type="text" data-i="${i}" data-k="fromUrl" value="${esc(d.fromUrl||"")}" placeholder="${esc(t("f_mapUrl"))}"></div>
         <div class="destrow"><input type="text" data-i="${i}" data-k="to" value="${esc(d.to||"")}" placeholder="${esc(t("f_to"))}">
           <input type="text" data-i="${i}" data-k="toUrl" value="${esc(d.toUrl||"")}" placeholder="${esc(t("f_mapUrl"))}"></div>
-        <div><button class="ghost" data-rt="${i}" style="padding:4px 8px;font-size:12px">↩ ${esc(t("roundTrip"))}</button></div>
+        ${(Array.isArray(d.extraTos)?d.extraTos:[]).map((x,j)=>`
+        <div class="destrow"><input type="text" data-i="${i}" data-x="${j}" data-k="to" value="${esc(x.to||"")}" placeholder="${esc(t("f_to"))}">
+          <input type="text" data-i="${i}" data-x="${j}" data-k="toUrl" value="${esc(x.toUrl||"")}" placeholder="${esc(t("f_mapUrl"))}">
+          <button class="ghost danger" data-xdel="${i}:${j}" style="min-width:auto;padding:4px 8px">✕</button></div>`).join("")}
+        <div><button class="ghost" data-rt="${i}" style="padding:4px 8px;font-size:12px">↩ ${esc(t("roundTrip"))} ＋</button></div>
         <div class="destrow"><input type="text" data-i="${i}" data-k="detail" value="${esc(d.detail||d.note||"")}" placeholder="${esc(t("f_detail"))}"></div>
       </div>`).join("");
     list.querySelectorAll("input").forEach(inp=>inp.oninput=e=>{
-      draft.destinations[+e.target.dataset.i][e.target.dataset.k]=e.target.value;
+      const el=e.target, i=+el.dataset.i, k=el.dataset.k;
+      if(el.dataset.x!==undefined){ draft.destinations[i].extraTos[+el.dataset.x][k]=el.value; }
+      else { draft.destinations[i][k]=el.value; }
       updateRentLock(); // re-eval rent lock without losing focus
     });
     list.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{
       draft.destinations.splice(+b.dataset.del,1); draw();
     });
+    list.querySelectorAll("[data-xdel]").forEach(b=>b.onclick=()=>{
+      const [i,j]=b.dataset.xdel.split(":").map(Number);
+      draft.destinations[i].extraTos.splice(j,1); draw();
+    });
     list.querySelectorAll("[data-rt]").forEach(b=>b.onclick=()=>{
       const i=+b.dataset.rt, d=draft.destinations[i];
-      // insert the return leg right after: B→A with map links swapped; flagged so it
-      // doesn't count as a 2nd destination (round trip = one destination)
-      draft.destinations.splice(i+1,0,{from:d.to||"",fromUrl:d.toUrl||"",to:d.from||d.place||"",toUrl:d.fromUrl||"",detail:"",roundTrip:true});
+      if(!Array.isArray(d.extraTos)) d.extraTos=[];
+      d.extraTos.push({to:d.from||d.place||"", toUrl:d.fromUrl||""}); // round trip: add a stop that returns to the origin
       draw();
     });
   }
@@ -964,7 +975,8 @@ function openModal(dateStr,timeStr,existing){
       }
     }
     if(!draft.destinations.some(d=>(d.to||d.from||d.place||"").trim())) return show(t("err_place"));
-    draft.destinations=draft.destinations.filter(d=>(d.from||d.to||d.detail||d.fromUrl||d.toUrl||d.place||d.note||"").toString().trim());
+    draft.destinations.forEach(d=>{ if(Array.isArray(d.extraTos)){ d.extraTos=d.extraTos.filter(x=>x&&(x.to||"").trim()); if(!d.extraTos.length) delete d.extraTos; } });
+    draft.destinations=draft.destinations.filter(d=>(d.from||d.to||d.detail||d.fromUrl||d.toUrl||d.place||d.note||(d.extraTos&&d.extraTos.length)||"").toString().trim());
     draft.passengers=(draft.passengers||[]).map(s=>(s||"").trim()).filter(Boolean);
     if(draft.transportMode!=="own") draft.vehicleId=null;
     if(existing){
