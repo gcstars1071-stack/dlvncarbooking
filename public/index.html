@@ -358,6 +358,8 @@ function load(){
   save();
 }
 function save(){
+  // guard: never persist an uninitialised/empty dataset (would clobber real data)
+  if(!state.data || !Array.isArray(state.data.accounts) || !state.data.accounts.length){ console.warn("save skipped: data not loaded"); return; }
   if(USE_FIREBASE && fbDoc){ fbDoc.set(state.data).catch(e=>console.error("save failed",e)); return; }
   try{ localStorage.setItem(LS_KEY,JSON.stringify(state.data)); }catch(e){}
 }
@@ -402,7 +404,10 @@ function initFirebase(){
   fbDoc = firebase.firestore().collection("app").doc("data");
   let seeded=false;
   fbDoc.onSnapshot(snap=>{
-    if(!snap.exists){ if(!seeded){ seeded=true; fbDoc.set(seed()); } return; }
+    // Only seed when the SERVER confirms the doc is missing — never on a cached
+    // "not found" (Firestore can return that transiently before the server
+    // responds), which previously overwrote real data with defaults.
+    if(!snap.exists){ if(!seeded && !snap.metadata.fromCache){ seeded=true; fbDoc.set(seed()); } return; }
     state.data = snap.data();
     afterLoad();
   }, err=>{ console.error(err); alert("Firebase connection error: "+err.message); });
