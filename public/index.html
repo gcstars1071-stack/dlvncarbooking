@@ -1289,7 +1289,7 @@ function renderAlerts(){
   if(!isAdmin()){ app.innerHTML=`<div class="notice">${esc(t("accessDenied"))}</div>`; return; }
   if(!Array.isArray(state.data.telegramRecipients)) state.data.telegramRecipients=[];
   const recs=state.data.telegramRecipients;
-  const groupId=(String(TELEGRAM.chatId||"").startsWith("PASTE"))?"":String(TELEGRAM.chatId||"");
+  const groupId="";  // the Telegram group id now lives on the server (TELEGRAM_CHAT_ID), not in the client
   const rows = recs.length? recs.map((r,i)=>`<tr>
       <td><b>${esc(r.name||"")}</b></td><td class="hint">${esc(String(r.id))}</td>
       <td><button class="danger" data-delrec="${i}">${esc(t("remove"))}</button></td></tr>`).join("")
