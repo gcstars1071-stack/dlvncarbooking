@@ -99,6 +99,7 @@
   .badge.confirmed{background:var(--xanh-bg);color:var(--xanh-tx);border-color:var(--xanh-bd);}
   .badge.pending{background:var(--rent-bg);color:var(--rent-tx);border-color:var(--rent-bd);}
   .badge.rejected{background:var(--danger-bg);color:var(--danger);}
+  .badge.cancelled{background:var(--surface-2);color:var(--muted);border-color:var(--border-strong);text-decoration:line-through;}
 
   /* modal */
   .overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-start;
@@ -199,7 +200,7 @@ const I18N = {
     role_admin:"Admin", role_fleet:"Fleet manager", role_driver:"Driver", role_general:"General user",
     today:"Today", back:"Back to month",
     newResv:"New reservation", editResv:"Edit reservation", del:"Delete",
-    f_status:"Status", confirmDelete:"Delete this reservation?",
+    f_status:"Status", confirmDelete:"Delete this reservation?", cancelResv:"Cancel reservation", confirmCancel:"Cancel this reservation?", cancelled:"Cancelled",
     f_user:"User name", f_time:"Usage time", f_start:"Start", f_end:"End",
     f_transport:"Transport", f_vehicle:"Vehicle", f_dest:"Trip (From / To / Detail)",
     f_from:"From", f_to:"To", f_detail:"Detail", f_mapUrl:"Map link (optional)", f_dept:"Department",
@@ -213,7 +214,7 @@ const I18N = {
     editAssign:"Edit / assign", assignFirst:"Assign a vehicle before approving.",
     blockedBy:"unavailable",
     reason_hold:"Hold", reason_repair:"Repair",
-    st_pending:"Pending", st_confirmed:"Confirmed", st_rejected:"Rejected",
+    st_pending:"Pending", st_confirmed:"Confirmed", st_rejected:"Rejected", st_cancelled:"Cancelled",
     ap_title:"Pending approvals", ap_empty:"No pending requests.",
     ap_admin:"Admin", ap_fleet:"Fleet", approve:"Approve", reject:"Reject",
     ap_note:"Approving confirms the reservation right away; you can change it below.",
@@ -266,7 +267,7 @@ const I18N = {
     role_admin:"Quản trị", role_fleet:"Quản lý xe", role_driver:"Tài xế", role_general:"Người dùng",
     today:"Hôm nay", back:"Về lịch tháng",
     newResv:"Đặt xe mới", editResv:"Sửa lịch", del:"Xóa",
-    f_status:"Trạng thái", confirmDelete:"Xóa lịch này?",
+    f_status:"Trạng thái", confirmDelete:"Xóa lịch này?", cancelResv:"Hủy lịch", confirmCancel:"Hủy lịch này?", cancelled:"Đã hủy",
     f_user:"Tên người dùng", f_time:"Thời gian sử dụng", f_start:"Bắt đầu", f_end:"Kết thúc",
     f_transport:"Phương tiện", f_vehicle:"Xe", f_dest:"Hành trình (Đi / Đến / Nội dung)",
     f_from:"Điểm đi", f_to:"Điểm đến", f_detail:"Nội dung", f_mapUrl:"Link bản đồ (tùy chọn)", f_dept:"Phòng ban",
@@ -280,7 +281,7 @@ const I18N = {
     editAssign:"Sửa / điều xe", assignFirst:"Hãy điều xe trước khi duyệt.",
     blockedBy:"không khả dụng",
     reason_hold:"Giữ chỗ", reason_repair:"Sửa chữa",
-    st_pending:"Chờ duyệt", st_confirmed:"Đã duyệt", st_rejected:"Từ chối",
+    st_pending:"Chờ duyệt", st_confirmed:"Đã duyệt", st_rejected:"Từ chối", st_cancelled:"Đã hủy",
     ap_title:"Yêu cầu chờ duyệt", ap_empty:"Không có yêu cầu.",
     ap_admin:"Quản trị", ap_fleet:"Quản lý xe", approve:"Duyệt", reject:"Từ chối",
     ap_note:"Duyệt sẽ xác nhận ngay; có thể chỉnh lại ở danh sách bên dưới.",
@@ -485,8 +486,9 @@ function vehicleById(id){ return state.data.vehicles.find(v=>v.id===id); }
 function visibleReservations(dateStr){
   return state.data.reservations.filter(r=>{
     if(r.date!==dateStr) return false;
-    if(r.status==="rejected") return false;
-    if(!P("seeDetails") && r.status!=="confirmed") return false;
+    if(r.status==="rejected"||r.status==="cancelled") return false;
+    const mine = state.user && r.createdBy && state.user.id===r.createdBy; // bookers always see their own
+    if(!P("seeDetails") && r.status!=="confirmed" && !mine) return false;
     return true;
   }).sort((a,b)=>a.startTime.localeCompare(b.startTime));
 }
@@ -562,6 +564,14 @@ async function notifyTelegramConfirmed(r){
   L.push("• Open: "+location.origin+location.pathname+"#d="+r.date);
   await tgSend(L.join("\n"), {replyTo: r.tgMsgIds||{}});
 }
+/* reservation cancelled → cancel alert, replied onto the original request message */
+async function notifyTelegramCancelled(r){
+  if(!USE_TELEGRAM || !r) return;
+  const L=resvLines(r,"❌ Reservation cancelled / 예약 취소  ["+(r.no||"?")+"]"); L.push("• Status: cancelled");
+  if(r.cancelledBy) L.push("• Cancelled by: "+r.cancelledBy);
+  L.push("• Open: "+location.origin+location.pathname+"#d="+r.date);
+  await tgSend(L.join("\n"), {replyTo: r.tgMsgIds||{}});
+}
 function vehicleAvailable(vehicleId,dateStr,startTime,endTime){
   const v=vehicleById(vehicleId); if(!v) return true;
   const s=timeToMin(startTime), e=timeToMin(endTime);
@@ -584,7 +594,7 @@ function overlapMin(s1,e1,s2,e2){ return s1<e2 && e1>s2; }
 function busyIntervals(vehicleId,dateStr,excludeId){
   const out=[];
   state.data.reservations.forEach(r=>{
-    if(r.id===excludeId||r.date!==dateStr||r.status==="rejected") return;
+    if(r.id===excludeId||r.date!==dateStr||r.status==="rejected"||r.status==="cancelled") return;
     if(r.transportMode!=="own"||r.vehicleId!==vehicleId) return;
     out.push([timeToMin(r.startTime),timeToMin(r.endTime)]);
   });
@@ -828,6 +838,24 @@ function openModal(dateStr,timeStr,existing){
     return o;
   }
   function destCount(){ return draft.destinations.filter(d=>(d.to||d.place||"").trim()).length; } // legs (cards) with a destination; round-trip return stops live inside a leg and don't count
+  // the booker (createdBy) or an admin/fleet manager can cancel a not-yet-cancelled reservation
+  const canCancel = !!existing && existing.status!=="cancelled" && (isAdmin() || P("resvEdit") || (state.user && existing.createdBy && state.user.id===existing.createdBy));
+  function cancelBtnHtml(){ return canCancel?`<button id="mCancelResv" class="danger" style="margin-right:8px">${esc(t("cancelResv"))}</button>`:""; }
+  function wireCancel(){
+    const b=modal.querySelector("#mCancelResv"); if(!b) return;
+    b.onclick=()=>{
+      const act=b.closest(".actions");
+      act.innerHTML=`<span style="margin-right:auto;color:var(--danger);font-size:13px">${esc(t("confirmCancel"))}</span>
+        <button id="mcNo">${esc(t("cancel"))}</button>
+        <button id="mcYes" class="danger">${esc(t("cancelResv"))}</button>`;
+      modal.querySelector("#mcNo").onclick=()=>draw();
+      modal.querySelector("#mcYes").onclick=()=>{
+        const rec=state.data.reservations.find(x=>x.id===existing.id);
+        if(rec){ rec.status="cancelled"; rec.cancelledBy=(state.user&&state.user.name)||""; rec.decidedAt=Date.now(); save(); notifyTelegramCancelled(rec); }
+        ov.remove(); render();
+      };
+    };
+  }
 
   function draw(){
     if(existing && !canEdit){ drawReadOnly(); return; }
@@ -879,10 +907,11 @@ function openModal(dateStr,timeStr,existing){
       <div class="err" id="mErr" hidden></div>
       <div class="actions">
         ${existing && P("resvEdit")?`<button id="mDelete" class="danger" style="margin-right:auto">${esc(t("del"))}</button>`:""}
+        ${cancelBtnHtml()}
         <button id="mCancel">${esc(t("cancel"))}</button>
         <button id="mSave" class="primary">${esc(t("save"))}</button>
       </div>`;
-    drawDest(); drawPax();
+    drawDest(); drawPax(); wireCancel();
     if(existing){
       modal.querySelectorAll("#mStatus button").forEach(b=>b.onclick=()=>{ draft.status=b.dataset.st; draw(); });
       const delBtn=modal.querySelector("#mDelete");
@@ -1022,7 +1051,7 @@ function openModal(dateStr,timeStr,existing){
         if(draft.status==="confirmed" && prev.status!=="confirmed") confirmedRec=merged; // just confirmed via edit
       }
     }else{
-      newRec={...draft,id:uid(),no:makeResvNo(draft.date),status:"pending",approvals:{admin:null,fleet:null},createdAt:Date.now()};
+      newRec={...draft,id:uid(),no:makeResvNo(draft.date),status:"pending",approvals:{admin:null,fleet:null},createdAt:Date.now(),createdBy:(state.user&&state.user.id)||null};
       state.data.reservations.push(newRec);
     }
     save(); ov.remove(); render();
@@ -1043,8 +1072,9 @@ function openModal(dateStr,timeStr,existing){
       <div class="field"><label>${esc(t("f_dest"))}</label><ul style="margin:4px 0 0;padding-left:18px">${dest}</ul></div>
       ${pax}
       ${isAdmin() && r.adminNote?`<div class="field"><label>${esc(t("adminNote"))}</label><div style="color:var(--warn)">${esc(r.adminNote)}</div></div>`:""}
-      <div class="actions"><button id="roClose" class="primary">${esc(t("cancel"))}</button></div>`;
+      <div class="actions">${cancelBtnHtml()}<button id="roClose" class="primary">${esc(t("cancel"))}</button></div>`;
     modal.querySelector("#roClose").onclick=()=>ov.remove();
+    wireCancel();
   }
   draw();
 }
