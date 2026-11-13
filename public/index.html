@@ -93,7 +93,8 @@
   .evt.own{background:var(--own-bg);color:var(--own-tx);border-color:var(--own-bd);}
   .evt.xanh{background:var(--xanh-bg);color:var(--xanh-tx);border-color:var(--xanh-bd);}
   .evt.rent{background:var(--rent-bg);color:var(--rent-tx);border-color:var(--rent-bd);}
-  .evt.pending{border-style:dashed;}
+  .evt.pending{border-style:dashed;opacity:.55;}
+  .tag.pending{opacity:.55;}
   .evt b{font-weight:600;}
   .badge{font-size:10px;border-radius:20px;padding:1px 7px;border:1px solid var(--border-strong);}
   .badge.confirmed{background:var(--xanh-bg);color:var(--xanh-tx);border-color:var(--xanh-bd);}
@@ -487,9 +488,7 @@ function visibleReservations(dateStr){
   return state.data.reservations.filter(r=>{
     if(r.date!==dateStr) return false;
     if(r.status==="rejected"||r.status==="cancelled") return false;
-    const mine = state.user && r.createdBy && state.user.id===r.createdBy; // bookers always see their own
-    if(!P("seeDetails") && r.status!=="confirmed" && !mine) return false;
-    return true;
+    return true; // pending shows too (dimmed via .pending); details still gated by canSeeDetails()
   }).sort((a,b)=>a.startTime.localeCompare(b.startTime));
 }
 function transportLabel(r){
@@ -560,7 +559,7 @@ async function notifyTelegram(r){
 /* reservation confirmed → confirmed alert, replied onto the original request message */
 async function notifyTelegramConfirmed(r){
   if(!USE_TELEGRAM || !r) return;
-  const L=resvLines(r,"✅ Confirmed schedule / 배차 확정  ["+(r.no||"?")+"]"); L.push("• Status: confirmed");
+  const L=resvLines(r,"✅ Confirmed schedule / 배차 확정  ["+(r.no||"?")+"]"); L.push("• Status: Confirmed"+(r.confirmedBy?" - "+r.confirmedBy:""));
   L.push("• Open: "+location.origin+location.pathname+"#d="+r.date);
   await tgSend(L.join("\n"), {replyTo: r.tgMsgIds||{}});
 }
@@ -1048,7 +1047,7 @@ function openModal(dateStr,timeStr,existing){
         if(draft.status!==prev.status) draft.decidedAt=Date.now();
         const merged={...prev,...draft};
         state.data.reservations[idx]=merged;
-        if(draft.status==="confirmed" && prev.status!=="confirmed") confirmedRec=merged; // just confirmed via edit
+        if(draft.status==="confirmed" && prev.status!=="confirmed"){ merged.confirmedBy=(state.user&&state.user.name)||""; confirmedRec=merged; } // just confirmed via edit
       }
     }else{
       newRec={...draft,id:uid(),no:makeResvNo(draft.date),status:"pending",approvals:{admin:null,fleet:null},createdAt:Date.now(),createdBy:(state.user&&state.user.id)||null};
@@ -1118,7 +1117,7 @@ function renderApprovals(){
     if(b.dataset.act==="reject"){ r.approvals[slot]=false; r.status="rejected"; r.decidedAt=Date.now(); save(); renderApprovals(); return; }
     // approve: a dispatch request must have a vehicle assigned first → open editor to assign
     if(r.transportMode==="own" && (!r.vehicleId || r.vehicleId==="REQUEST")){ toast(t("assignFirst")); openModal(r.date,r.startTime,r); return; }
-    r.approvals[slot]=true; r.status="confirmed"; r.decidedAt=Date.now();
+    r.approvals[slot]=true; r.status="confirmed"; r.decidedAt=Date.now(); r.confirmedBy=(state.user&&state.user.name)||"";
     save(); renderApprovals(); notifyTelegramConfirmed(r);
   });
   app.querySelectorAll("[data-edit]").forEach(el=>el.onclick=()=>{
