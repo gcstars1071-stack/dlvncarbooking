@@ -1125,7 +1125,10 @@ function renderApprovals(){
     .sort((a,b)=>(b.decidedAt||b.createdAt||0)-(a.decidedAt||a.createdAt||0)).slice(0,15);
   const apprRows = approved.length? approved.map(r=>`<div class="approvrow" ${canEdit?`data-edit="${r.id}" style="cursor:pointer"`:""}>
       <div>${info(r)}</div>
-      <span class="badge confirmed">${esc(t("st_confirmed"))}</span>
+      <div style="text-align:right">
+        <span class="badge confirmed">${esc(t("st_confirmed"))}</span>
+        ${r.confirmedBy?`<div class="hint" style="margin-top:2px">${esc(r.confirmedBy)}</div>`:""}
+      </div>
     </div>`).join("") : `<div class="notice">${esc(t("ap_approvedEmpty"))}</div>`;
 
   app.innerHTML=`<h2 style="font-size:17px;margin:0 0 4px">${esc(t("ap_title"))}</h2>
